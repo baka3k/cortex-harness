@@ -249,7 +249,9 @@ Trạng thái hạ tầng `PROTOCOL_ERROR` và `CLIENT_EXCEPTION` luôn làm cas
 
 ## Contract được kiểm tra tự động
 
-Mỗi response phải có:
+Mỗi response phải có đúng một text block, nội dung là JSON envelope v2
+(`cortex.mcp.tool-result` / 2.0, single channel — không còn
+`structuredContent`):
 
 ```json
 {
@@ -257,26 +259,21 @@ Mỗi response phải có:
   "result": {
     "_meta": {
       "contract": "cortex.mcp.tool-result",
-      "contractVersion": "1.0",
+      "contractVersion": "2.0",
       "tool": "tool_name"
     },
     "content": [
       {
         "type": "text",
-        "text": "Nội dung ngắn gọn."
+        "text": "{\"contract\":\"cortex.mcp.tool-result\",\"contractVersion\":\"2.0\",\"tool\":\"tool_name\",\"message\":\"Success.\",\"ok\":true,\"data\":{},\"error\":null,\"truncation\":null}"
       }
     ],
-    "structuredContent": {
-      "ok": true,
-      "data": {},
-      "error": null
-    },
     "isError": false
   }
 }
 ```
 
-Với lỗi tool:
+Với lỗi tool, phần `error` bên trong envelope:
 
 ```json
 {
@@ -295,6 +292,9 @@ Với lỗi tool:
   }
 }
 ```
+
+Envelope quá 20.000 ký tự (env `MCP_CONTENT_MAX_CHARS`, `0` = tắt) sẽ bị
+thay `data` bằng preview + block `truncation` — JSON vẫn hợp lệ.
 
 Batch runner báo contract FAIL nếu error response làm lộ catalog/diagnostics
 nội bộ như:
@@ -351,7 +351,8 @@ khảo sát một tool có outcome phụ thuộc corpus.
 - Giữ `require_full_inventory: true` để phát hiện tool chưa có fixture.
 - Khai báo expected status và error code rõ ràng.
 - Chạy batch report và kiểm tra contract PASS.
-- Xác nhận `content` ngắn, dữ liệu đầy đủ nằm trong `structuredContent.data`.
+- Xác nhận `content[0].text` parse được JSON envelope v2, dữ liệu đầy đủ
+  nằm trong `data`.
 
 ### Sửa tool hoặc schema
 

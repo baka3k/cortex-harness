@@ -47,7 +47,10 @@ from tools.common.project_registry import (  # noqa: E402
 )
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
-from tool_error_middleware import install_tool_error_middleware
+from tool_error_middleware import (
+    install_tool_envelope_middleware,
+    install_tool_error_middleware,
+)
 from framework_registry import servlet_active_generation_predicate
 from falkordb_discovery import discover_falkordb_data_files
 
@@ -2763,18 +2766,14 @@ def _install_global_tool_error_wrapper() -> None:
         for item in catalog_entries
         if item.get("name")
     }
-    examples_by_tool: Dict[str, Any] = {
-        str(item.get("name")): item.get("example")
-        for item in catalog_entries
-        if item.get("name")
-    }
-
     install_tool_error_middleware(
         mcp_server,
         inputs_by_tool=inputs_by_tool,
-        example_for=examples_by_tool.get,
-        backend="fast",
     )
+    # Keep the standalone server on the shared v2 single-channel contract:
+    # without this, FastMCP auto-generates structuredContent for the raw
+    # dict payloads the tools here return.
+    install_tool_envelope_middleware(mcp_server)
 
 
 _install_global_tool_error_wrapper()

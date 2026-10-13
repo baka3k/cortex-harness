@@ -1,17 +1,31 @@
 """Shared protocol-boundary contract for Cortex MCP tool results.
 
-Business payloads stay tool-specific inside ``data``.  The wire-facing
-success/error shape is deliberately small and identical for graph_mcp and
-mind_mcp so clients never have to infer whether a dict is data or an error.
+v2 single-channel contract: the entire envelope is serialized as JSON into
+``content[0].text`` and ``structuredContent`` is no longer emitted.  Every
+tool of graph_mcp and mind_mcp produces the identical envelope shape, so
+clients parse one structure regardless of server, tool, or outcome.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from typing import Any, Mapping
 
 
 MCP_CONTRACT_NAME = "cortex.mcp.tool-result"
-MCP_CONTRACT_VERSION = "1.0"
+MCP_CONTRACT_VERSION = "2.0"
+
+# v2 carries the full payload in content, so the text channel is capped.
+# ``0`` disables the cap (debugging only). Read per call so tests can
+# monkeypatch the environment instead of module state.
+_DEFAULT_CONTENT_CAP_CHARS = 20_000
+_ERROR_DETAILS_MAX_ITEMS = 50
+_MAX_ERROR_MESSAGE_CHARS = 500
+_TRUNCATION_HINT = (
+    "Narrow the query (top_k/limit, include_raw_fields=false, "
+    "content_mode=summary) and retry."
+)
 
 _ERROR_CODE_ALIASES = {
     "unsupported_capability": "capability_unavailable",
@@ -19,6 +33,11 @@ _ERROR_CODE_ALIASES = {
     "type_error": "invalid_parameters",
     "lookup_error": "collection_unavailable",
     "project_not_registered_error": "project_not_registered",
+    # fastmcp wraps tool exceptions in ToolError before middleware sees them.
+    "tool_error": "tool_execution_error",
+    # fastmcp argument validation surfaces as pydantic ValidationError —
+    # same user mistake that proxied tools report as invalid_parameters.
+    "validation_error": "invalid_parameters",
 }
 
 # These fields describe server internals or duplicate information available
@@ -187,6 +206,12 @@ def normalize_error(
             value, (TimeoutError, ConnectionError)
         ):
             resolved_retryable = True
+    elif isinstance(value, str):
+        # Frameworks convert tool exceptions to plain-text error results
+        # before they reach the envelope; keep the original text as the
+        # message instead of collapsing it to the generic fallback.
+        stripped = value.strip()
+        resolved_message = resolved_message or (stripped or None)
     elif isinstance(value, Mapping):
         raw_error = value.get("error")
         if isinstance(raw_error, Mapping):
@@ -231,10 +256,10 @@ def result_meta(tool_name: str | None) -> dict[str, str]:
 
 
 def result_summary(data: Any, *, ok: bool, message: str | None = None) -> str:
-    """Build bounded human content while full data stays structured."""
+    """One-line human message carried in the envelope ``message`` field."""
 
     if not ok:
-        return message or "Tool execution failed. See structuredContent.error."
+        return message or "Tool execution failed."
 
     count: int | None = None
     label = "item"
@@ -254,9 +279,146 @@ def result_summary(data: Any, *, ok: bool, message: str | None = None) -> str:
         count = len(data)
 
     if count is None:
-        return "Success. Read structuredContent.data."
+        return "Success."
     suffix = label if count == 1 else f"{label}s"
-    return f"Success: {count} {suffix}. Read structuredContent.data."
+    return f"Success: {count} {suffix}."
+
+
+def _content_cap_chars() -> int:
+    raw = os.getenv("MCP_CONTENT_MAX_CHARS")
+    if raw is None or not raw.strip():
+        return _DEFAULT_CONTENT_CAP_CHARS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return _DEFAULT_CONTENT_CAP_CHARS
+
+
+def _dumps(payload: Any) -> str:
+    """Serialize to JSON, tolerating non-native types via ``str`` fallback."""
+
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _bounded_error(error: Any) -> dict[str, Any] | None:
+    """Bound error messages and details values so errors cannot bloat either."""
+
+    if not isinstance(error, Mapping):
+        return None
+    bounded = dict(error)
+    bounded["message"] = str(bounded.get("message") or "")[
+        :_MAX_ERROR_MESSAGE_CHARS
+    ]
+    details = bounded.get("details")
+    if isinstance(details, Mapping):
+        capped: dict[str, Any] = {}
+        for key, item in details.items():
+            if isinstance(item, (list, tuple)) and len(item) > _ERROR_DETAILS_MAX_ITEMS:
+                capped[str(key)] = list(item)[:_ERROR_DETAILS_MAX_ITEMS]
+                capped["details_truncated"] = True
+            elif isinstance(item, str) and len(item) > _MAX_ERROR_MESSAGE_CHARS:
+                capped[str(key)] = item[:_MAX_ERROR_MESSAGE_CHARS]
+                capped["details_truncated"] = True
+            else:
+                capped[str(key)] = item
+        bounded["details"] = capped
+    return bounded
+
+
+def result_envelope_json(
+    tool: str | None,
+    *,
+    ok: bool,
+    data: Any = None,
+    error: Any = None,
+    message: str | None = None,
+) -> str:
+    """Serialize the v2 single-channel envelope into ``content[0].text``.
+
+    The returned string is always valid JSON.  Oversize payloads degrade to
+    a bounded preview (never cut mid-string); error details are bounded the
+    same way.  ``structuredContent`` is deliberately not part of v2.
+    """
+
+    if isinstance(data, str):
+        # Text-only tools (e.g. the raw-string unwrap fallback) keep the
+        # envelope type-stable instead of leaking a bare string payload.
+        data = {"text": data}
+    if message is None:
+        message = result_summary(data, ok=ok)
+    bounded_error = _bounded_error(error)
+    envelope: dict[str, Any] = {
+        "contract": MCP_CONTRACT_NAME,
+        "contractVersion": MCP_CONTRACT_VERSION,
+        "tool": str(tool or "unknown"),
+        "message": str(message)[:_MAX_ERROR_MESSAGE_CHARS] if not ok else str(message),
+        "ok": bool(ok),
+        "data": data,
+        "error": bounded_error,
+        "truncation": None,
+    }
+    cap = _content_cap_chars()
+    text = _dumps(envelope)
+    if cap <= 0 or len(text) <= cap:
+        return text
+    if not ok:
+        # Contract invariant: failed envelopes keep ``data`` null, so the
+        # size cap must degrade ``error.details`` instead of previewing
+        # ``data``. ``_bounded_error`` already caps message and list/string
+        # lengths; if the envelope is still over the cap, drop details
+        # entirely (code/message/retryable always survive).
+        degraded = dict(envelope)
+        if bounded_error is not None:
+            degraded["error"] = {
+                "code": bounded_error.get("code"),
+                "message": bounded_error.get("message"),
+                "retryable": bounded_error.get("retryable"),
+                "details": {},
+            }
+        degraded["truncation"] = {
+            "truncated": True,
+            "reason": "error_details_dropped",
+            "cap_chars": cap,
+            "hint": _TRUNCATION_HINT,
+        }
+        return _dumps(degraded)
+    return _truncated_envelope_json(envelope, cap)
+
+
+def _truncated_envelope_json(envelope: dict[str, Any], cap: int) -> str:
+    """Degrade ``data`` to a preview so the JSON stays valid under ``cap``.
+
+    Overhead is measured on the fully built template (truncation block and
+    note included) so the final size respects the cap; a cap below the
+    fixed overhead degrades to an empty preview rather than negative
+    slicing.  When ``cap < overhead`` the returned text necessarily exceeds
+    the cap — the envelope shape is never broken to enforce it.
+    """
+
+    hint = _TRUNCATION_HINT
+    data_json = _dumps(envelope.get("data"))
+    template = dict(envelope)
+    template["data"] = {"truncated": True, "preview": "", "note": hint}
+    template["truncation"] = {
+        "truncated": True,
+        "reason": "content_cap_exceeded",
+        "cap_chars": cap,
+        "hint": hint,
+    }
+    overhead = len(_dumps(template)) - len('""')
+    preview = data_json[: max(0, cap - overhead)]
+    template["data"] = {"truncated": True, "preview": preview, "note": hint}
+    text = _dumps(template)
+    # JSON escaping can inflate the embedded preview beyond its budget
+    # (quotes/backslashes double up); shave until the text fits.
+    while len(text) > cap and preview:
+        preview = preview[: max(0, len(preview) - (len(text) - cap))]
+        template["data"]["preview"] = preview
+        text = _dumps(template)
+    return text
 
 
 __all__ = [
@@ -264,6 +426,7 @@ __all__ = [
     "MCP_CONTRACT_VERSION",
     "normalize_error",
     "normalize_success",
+    "result_envelope_json",
     "result_meta",
     "result_summary",
 ]

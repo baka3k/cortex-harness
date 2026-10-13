@@ -14,7 +14,9 @@ python-pptx
 openpyxl
 sentence-transformers>=2.7.0
 spacy
-fastmcp
+# Pinned: v2 single-channel envelope relies on to_mcp_result/exclude_none
+# behavior verified on 4.0.4 (plan 261013-0000).
+fastmcp==4.0.4
 lxml
 gliner
 pandas

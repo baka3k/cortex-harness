@@ -8,6 +8,7 @@ blockedBy: []
 supersedes:
   - 260727-testtool-mcp-coverage-and-ux
 relatedPlans:
+  - 261013-0000-mcp-single-channel-json-contract (its phase 02 flips testtool mcp_client to content-first envelope parsing)
   - 260728-1400-remove-db-param-unify-project-id
   - 260728-0900-simplify-search-full-removal
   - 260728-0000-unified-ingest-query-contract

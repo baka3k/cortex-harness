@@ -50,7 +50,10 @@ from tools.common.project_registry import (
 )
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog, ANDROID_OVERRIDES
-from tool_error_middleware import install_tool_error_middleware
+from tool_error_middleware import (
+    install_tool_envelope_middleware,
+    install_tool_error_middleware,
+)
 from falkordb_discovery import discover_falkordb_data_files
 from framework_registry import backend_label_union
 
@@ -2920,18 +2923,12 @@ def _install_global_tool_error_wrapper() -> None:
         for item in _android_catalog
         if item.get("name")
     }
-    examples_by_tool: Dict[str, Any] = {
-        str(item.get("name")): item.get("example")
-        for item in _android_catalog
-        if item.get("name")
-    }
-
     install_tool_error_middleware(
         mcp_server,
         inputs_by_tool=inputs_by_tool,
-        example_for=examples_by_tool.get,
-        backend="android",
     )
+    # Direct-served mode also stays on the v2 single-channel contract.
+    install_tool_envelope_middleware(mcp_server)
 
 
 @mcp_server.tool(

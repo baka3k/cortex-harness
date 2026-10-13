@@ -41,6 +41,7 @@ from cortex_harness.storage import (
 from cortex_harness.mcp_contract import (
     normalize_error,
     normalize_success,
+    result_envelope_json,
     result_meta,
     result_summary,
 )
@@ -1369,7 +1370,11 @@ def fetch_paragraph_by_source(
 
 
 def _standard_tool(mcp: FastMCP):
-    """Register a Mind tool with the shared Cortex MCP result contract."""
+    """Register a Mind tool with the shared Cortex MCP v2 result contract.
+
+    v2 single channel: the JSON envelope is the only text block and
+    ``structuredContent`` stays unset (protocol field absent on the wire).
+    """
 
     def decorate(function):
         @functools.wraps(function)
@@ -1382,14 +1387,15 @@ def _standard_tool(mcp: FastMCP):
                     content=[
                         TextContent(
                             type="text",
-                            text=result_summary(
-                                None,
+                            text=result_envelope_json(
+                                function.__name__,
                                 ok=False,
+                                data=None,
+                                error=envelope["error"],
                                 message=envelope["error"]["message"],
                             ),
                         )
                     ],
-                    structuredContent=envelope,
                     isError=True,
                     _meta=result_meta(function.__name__),
                 )
@@ -1399,10 +1405,14 @@ def _standard_tool(mcp: FastMCP):
                 content=[
                     TextContent(
                         type="text",
-                        text=result_summary(data, ok=True),
+                        text=result_envelope_json(
+                            function.__name__,
+                            ok=True,
+                            data=envelope["data"],
+                            message=result_summary(data, ok=True),
+                        ),
                     )
                 ],
-                structuredContent=envelope,
                 isError=False,
                 _meta=result_meta(function.__name__),
             )

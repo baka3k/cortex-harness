@@ -127,7 +127,9 @@ class MCPClient:
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
         payload = self.call_tool_raw(name, arguments)
         result = self._unwrap(payload)
-        # tools/call result: {"content": [...], "structuredContent": ..., "isError": bool}
+        # v2 single channel: content[0].text is the JSON envelope
+        # (contract cortex.mcp.tool-result); structuredContent is a legacy
+        # fallback for pre-v2 servers only.
         if isinstance(result, dict) and "content" in result:
             content = result["content"]
             parts = []
@@ -141,13 +143,37 @@ class MCPClient:
                 parts.append(str(content))
 
             combined = "\n".join(part for part in parts if part)
+            envelope = None
+            for part in (part.strip() for part in parts):
+                if not part.startswith("{"):
+                    continue
+                try:
+                    candidate = json.loads(part)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(candidate, dict) and "ok" in candidate:
+                    envelope = candidate
+                    break
+
             if result.get("isError"):
+                if envelope is not None:
+                    error = envelope.get("error")
+                    message = (
+                        error.get("message")
+                        if isinstance(error, dict)
+                        else None
+                    )
+                    raise MCPError(message or "Tool returned isError=true")
                 if not combined and result.get("structuredContent") is not None:
                     combined = json.dumps(
                         result["structuredContent"], ensure_ascii=False
                     )
                 raise MCPError(combined or "Tool returned isError=true")
 
+            if envelope is not None:
+                return envelope
+
+            # Legacy (pre-v2) server fallback.
             if result.get("structuredContent") is not None:
                 return result["structuredContent"]
 

@@ -5,11 +5,9 @@
 Tài liệu này là chuẩn bắt buộc cho mọi tool của `graph_mcp` và `mind_mcp`.
 Mục tiêu là ngăn các lỗi đã lặp lại nhiều lần:
 
-- dữ liệu bị trả thành JSON string trong `content` thay vì object trong
-  `structuredContent`;
-- client coi `isError: true` là dữ liệu thành công;
 - mỗi tool tự đặt một kiểu error khác nhau (`type`, `warning`, `exception`,
   `error` string);
+- client coi `isError: true` là dữ liệu thành công;
 - success, empty và error không phân biệt được bằng máy;
 - output chứa nguyên `code`, `note` hoặc catalog chẩn đoán dù caller chỉ yêu
   cầu summary;
@@ -18,134 +16,121 @@ Mục tiêu là ngăn các lỗi đã lặp lại nhiều lần:
 Các từ **MUST**, **MUST NOT**, **SHOULD** và **MAY** trong tài liệu mang nghĩa
 quy chuẩn.
 
-## Contract chung
+## Contract chung (v2 — single channel)
 
-### Phân lớp của response
-
-MCP đã có protocol envelope riêng. Không tự tạo thêm HTTP status hoặc JSON-RPC
-envelope bên trong payload.
+Từ v2, toàn bộ response nằm trong MỘT kênh: `content[0].text` là chuỗi JSON
+envelope. `structuredContent` KHÔNG còn được emit — đây là thay đổi chủ đích
+so với v1 (xem [Lịch sử v1 → v2](#lịch-sử-v1--v2)); mọi client (kể cả những
+client chỉ render `content` cho LLM) đọc được trọn vẹn dữ liệu mà không cần
+curl thẳng JSON-RPC.
 
 | Lớp | Mục đích | Quy tắc |
 | --- | --- | --- |
-| `content` | Nội dung ngắn cho người/LLM | MUST ngắn, không chứa full payload hoặc source code |
-| `structuredContent` | Dữ liệu cho máy | MUST chứa contract chuẩn bên dưới |
+| `content` | Envelope JSON v2 — kênh duy nhất | MUST là JSON hợp lệ, đúng một text block |
+| `structuredContent` | — | MUST NOT emit |
 | `isError` | Trạng thái thực thi tool | MUST là `true` khi tool thất bại |
 | `_meta` | Metadata ngoài nghiệp vụ | MUST chứa tên/version contract và tên tool |
 
 Tên contract hiện tại:
 
 ```text
-cortex.mcp.tool-result / 1.0
+cortex.mcp.tool-result / 2.0
 ```
 
-### Success có dữ liệu
+### Envelope v2
 
 ```json
 {
-  "content": [
-    {
-      "type": "text",
-      "text": "Success: 1 result. Read structuredContent.data."
-    }
-  ],
-  "structuredContent": {
-    "ok": true,
-    "data": {
-      "db": "procsample",
-      "results": [
-        {
-          "id": "function-1",
-          "labels": ["Function"],
-          "properties": {
-            "name": "batch_job_run",
-            "file_path": "src/core/batch_job.c",
-            "content": "batch_job_run"
-          }
+  "contract": "cortex.mcp.tool-result",
+  "contractVersion": "2.0",
+  "tool": "search_functions",
+  "message": "Success: 1 result.",
+  "ok": true,
+  "data": {
+    "db": "procsample",
+    "results": [
+      {
+        "id": "function-1",
+        "labels": ["Function"],
+        "properties": {
+          "name": "batch_job_run",
+          "file_path": "src/core/batch_job.c",
+          "content": "batch_job_run"
         }
-      ],
-      "ids": ["function-1"]
-    },
-    "error": null
+      }
+    ],
+    "ids": ["function-1"]
   },
-  "isError": false,
-  "_meta": {
-    "contract": "cortex.mcp.tool-result",
-    "contractVersion": "1.0",
-    "tool": "search_functions"
-  }
+  "error": null,
+  "truncation": null
 }
 ```
 
+Phân vai field:
+
+| Field | Vai trò |
+| --- | --- |
+| `contract`, `contractVersion`, `tool` | Tự mô tả envelope (trùng `_meta`; `_meta` không vào context model nên không tốn token) |
+| `message` | Một câu ngắn cho người/LLM lướt nhanh |
+| `ok` | `true`/`false` — phân biệt máy được success/error |
+| `data` | **Toàn bộ payload nghiệp vụ**; shape giữ nguyên theo tool |
+| `error` | `null` hoặc `{code, message, retryable, details}` |
+| `truncation` | `null` hoặc block mô tả việc bị cap kích thước |
+
 Quy tắc:
 
-- `data` MUST giữ nguyên kiểu nghiệp vụ: object là object, list là list, không
-  `json.dumps` rồi nhét thành string.
+- `data` MUST giữ nguyên kiểu nghiệp vụ: object là object, list là list,
+  không `json.dumps` rồi nhét thành string.
 - Tên field nghiệp vụ MAY khác giữa các tool; envelope không được khác.
 - Không lặp `ok` hoặc `error` lần hai bên trong `data`.
 - Metadata như contract version, tool name và tracing SHOULD nằm trong
   `_meta`, không làm bẩn `data`.
+- Payload string thô (tool chỉ trả text) MUST được wrap thành
+  `{"text": "<string>"}` để envelope giữ kiểu ổn định.
+
+### Cap kích thước (structural truncation)
+
+`content[0].text` bị cap mặc định **20.000 ký tự**, override bằng env
+`MCP_CONTENT_MAX_CHARS` (giá trị `0` = tắt cap, chỉ dùng khi debug).
+
+Khi vượt cap:
+
+- `data` MUST được thay bằng
+  `{"truncated": true, "preview": "<head của data JSON>", "note": "<hint>"}`;
+- block `truncation` MUST được điền:
+  `{"truncated": true, "reason": "content_cap_exceeded", "cap_chars": N, "hint": "<hint>"}`;
+- JSON MUST VẪN hợp lệ — không bao giờ cắt giữa chuỗi;
+- error path cũng chịu cap: `error.message` cắt ở 500 ký tự, list trong
+  `error.details` cắt ở 50 phần tử kèm `details_truncated: true`.
+
+Client gặp `truncation.truncated = true` SHOULD thu hẹp query (`top_k`,
+`limit`, `include_raw_fields=false`, `content_mode=summary`) thay vì đọc
+preview.
 
 ### Success nhưng không có dữ liệu
 
-Không có kết quả là một success hợp lệ, không phải exception.
-
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "Success: 0 results. Read structuredContent.data."
-    }
-  ],
-  "structuredContent": {
-    "ok": true,
-    "data": {
-      "db": "procsample",
-      "results": [],
-      "ids": []
-    },
-    "error": null
-  },
-  "isError": false,
-  "_meta": {
-    "contract": "cortex.mcp.tool-result",
-    "contractVersion": "1.0",
-    "tool": "search_functions"
-  }
-}
-```
-
-MUST dùng collection rỗng đúng kiểu (`[]` hoặc `{}`). Không đổi lúc thì
-`null`, lúc thì `[]`, lúc thì thiếu field.
+Không có kết quả là một success hợp lệ, không phải exception. `data` là
+collection rỗng đúng kiểu (`[]` hoặc `{}`), `message` là `"Success: 0 results."`.
 
 ### Tool execution error
 
 ```json
 {
-  "content": [
-    {
-      "type": "text",
-      "text": "NAVIGATE is unavailable for parser cplus."
-    }
-  ],
-  "structuredContent": {
-    "ok": false,
-    "data": null,
-    "error": {
-      "code": "capability_unavailable",
-      "message": "NAVIGATE is unavailable for parser cplus.",
-      "retryable": false,
-      "details": {
-        "missing_relationships": ["NAVIGATE"]
-      }
+  "contract": "cortex.mcp.tool-result",
+  "contractVersion": "2.0",
+  "tool": "find_screen_workflows",
+  "message": "NAVIGATE is unavailable for parser cplus.",
+  "ok": false,
+  "data": null,
+  "error": {
+    "code": "capability_unavailable",
+    "message": "NAVIGATE is unavailable for parser cplus.",
+    "retryable": false,
+    "details": {
+      "missing_relationships": ["NAVIGATE"]
     }
   },
-  "isError": true,
-  "_meta": {
-    "contract": "cortex.mcp.tool-result",
-    "contractVersion": "1.0",
-    "tool": "find_screen_workflows"
-  }
+  "truncation": null
 }
 ```
 
@@ -167,8 +152,9 @@ Quy tắc:
   Client dùng `list_mcp_functions`, `list_parsers` hoặc
   `inspect_parser_capabilities` khi cần dữ liệu discovery chi tiết.
 - Không trả `warning` thay cho error nếu request không thể thực hiện.
-- Unknown tool, malformed JSON-RPC và lỗi protocol vẫn dùng JSON-RPC error;
-  không ép chúng vào tool envelope.
+- Unknown tool: fastmcp 4 trả isError result — trên unified server result
+  này được bọc envelope v2 với code `not_found_error`; malformed JSON-RPC và
+  lỗi transport vẫn ở lớp JSON-RPC, không ép vào tool envelope.
 
 ### Mã lỗi chuẩn
 
@@ -198,10 +184,15 @@ Không tự viết envelope trong từng tool. Dùng helper chung:
 from cortex_harness.mcp_contract import (
     normalize_error,
     normalize_success,
+    result_envelope_json,
     result_meta,
     result_summary,
 )
 ```
+
+`result_envelope_json(tool, ok=..., data=..., error=..., message=...)` là
+điểm serialize duy nhất — nó áp cap, bound error details và luôn trả JSON
+hợp lệ.
 
 ### Template FastMCP `ToolResult`
 
@@ -211,8 +202,12 @@ from fastmcp.tools.tool import ToolResult
 
 def success_result(tool_name: str, data: object) -> ToolResult:
     return ToolResult(
-        content=result_summary(data, ok=True),
-        structured_content=normalize_success(data),
+        content=result_envelope_json(
+            tool_name,
+            ok=True,
+            data=normalize_success(data)["data"],
+            message=result_summary(data, ok=True),
+        ),
         meta=result_meta(tool_name),
         is_error=False,
     )
@@ -221,16 +216,21 @@ def success_result(tool_name: str, data: object) -> ToolResult:
 def error_result(tool_name: str, exc: Exception) -> ToolResult:
     payload = normalize_error(exc)
     return ToolResult(
-        content=result_summary(
-            None,
+        content=result_envelope_json(
+            tool_name,
             ok=False,
+            data=None,
+            error=payload["error"],
             message=payload["error"]["message"],
         ),
-        structured_content=payload,
         meta=result_meta(tool_name),
         is_error=True,
     )
 ```
+
+KHÔNG truyền `structured_content` — fastmcp sẽ auto-generate
+`structuredContent` cho dict return nếu middleware/tool không wrap; middleware
+là điểm chặn bắt buộc.
 
 ### Template MCP SDK `CallToolResult`
 
@@ -243,10 +243,14 @@ def success_result(tool_name: str, data: object) -> CallToolResult:
         content=[
             TextContent(
                 type="text",
-                text=result_summary(data, ok=True),
+                text=result_envelope_json(
+                    tool_name,
+                    ok=True,
+                    data=normalize_success(data)["data"],
+                    message=result_summary(data, ok=True),
+                ),
             )
         ],
-        structuredContent=normalize_success(data),
         isError=False,
         _meta=result_meta(tool_name),
     )
@@ -272,6 +276,8 @@ thành `string` trong `tools/list` chỉ để tiện coercion ở runtime.
 
 ### Search/list
 
+`data` giữ shape v1:
+
 ```json
 {
   "results": [],
@@ -292,10 +298,9 @@ thành `string` trong `tools/list` chỉ để tiện coercion ở runtime.
 
 `semantic_graph_search` trả thêm trong `data`: block `scope` giải thích
 chính nó đã search ở đâu, và `warnings` (list string, mirror của
-`scope.warnings`). Envelope `{ok,data,error}` không đổi; các field là
-additive. `collections_searched` giữ nguyên ý nghĩa cũ (tên được yêu cầu
-theo target, `:285`) — chi tiết discovery nằm ở `scope.discovered_collections`,
-hit thật nằm ở `scope.per_collection_hits`.
+`scope.warnings`). Envelope v2 không đổi; các field là additive.
+`collections_searched` giữ nguyên ý nghĩa cũ — chi tiết discovery nằm ở
+`scope.discovered_collections`, hit thật nằm ở `scope.per_collection_hits`.
 
 | Field | Kiểu | Ý nghĩa |
 |---|---|---|
@@ -311,38 +316,9 @@ hit thật nằm ở `scope.per_collection_hits`.
 | `graph_present` | `bool \| null` | Gate GRAPH.LIST cho shard convention; `null` = gate không trả lời được (fail-open). |
 | `warnings` | `list[string]` | Fallback, cap, store unreachable, found-but-empty… |
 
-Ví dụ — id lạ, mặc định (`strict_scope=false`):
-
-```json
-{
-  "ok": true,
-  "data": {
-    "query": "orders",
-    "scope": {
-      "mode": "fallback_all",
-      "requested_project_id": "typo_id",
-      "resolved_project_id": null,
-      "registry_hit": false,
-      "collections_searched": ["orders_doc"],
-      "collections_present": ["alpha_doc", "beta_doc"],
-      "per_collection_hits": {"alpha_doc": 1, "beta_doc": 1},
-      "discovered_collections": ["alpha_doc", "beta_doc"],
-      "targets_total": 3,
-      "targets_searched": 3,
-      "graph_present": false,
-      "warnings": ["project 'typo_id' not found in registry or stores; fell back to all projects"]
-    },
-    "warnings": ["project 'typo_id' not found in registry or stores; fell back to all projects"],
-    "passages": []
-  },
-  "error": null
-}
-```
-
 `strict_scope=true` + id lạ → `ok:false`, error code
 `project_not_registered` (query không bao giờ tự tạo shard rác). Unscoped
-sạch trả `mode:"unscoped"`, `warnings: []`. `semantic_search` (passage-only)
-dùng cùng cơ chế nội bộ nhưng chưa exposing block `scope` (follow-up).
+sạch trả `mode:"unscoped"`, `warnings: []`.
 
 Toán tử: `dev doctor` có nhóm **scope drift** (warn-only) báo shard lạ /
 declared-but-absent / shard rỗng / config JSON hỏng.
@@ -380,17 +356,17 @@ không có lý do và tài liệu migration.
 - [ ] Required/optional/default trong signature khớp `tools/list.inputSchema`.
 - [ ] Validate range, enum, length và tổ hợp input trước khi gọi storage.
 - [ ] Payload nghiệp vụ trả kiểu Python object/list, không trả JSON string.
-- [ ] Success đi qua shared normalizer và đặt full data trong
-  `structuredContent.data`.
+- [ ] Success đi qua shared normalizer và `result_envelope_json` — KHÔNG
+  truyền `structured_content`.
 - [ ] Empty là success với collection rỗng đúng kiểu.
 - [ ] Tool error có `isError=true` và đủ `code/message/retryable/details`.
-- [ ] `content` ngắn, không chứa full JSON, source code, secret hoặc stack trace.
 - [ ] Metadata contract/tool/tracing nằm trong `_meta`.
 - [ ] Nếu framework hỗ trợ output schema, schema là object và khớp response.
 - [ ] Có unit test success, empty, invalid input và backend failure.
 - [ ] Có test xác nhận không leak `code`/`note` khi raw fields tắt.
 - [ ] Có live smoke test qua streamable HTTP, không chỉ gọi function trực tiếp.
-- [ ] Client test xác nhận ưu tiên `structuredContent` và tôn trọng `isError`.
+- [ ] Client test xác nhận parse JSON từ `content[0].text` và tôn trọng
+  `isError`.
 - [ ] Tool được thêm vào catalog/discovery đúng một lần.
 - [ ] Cập nhật tài liệu và ví dụ gọi tool.
 
@@ -423,9 +399,10 @@ không có lý do và tài liệu migration.
 .venv/bin/pytest -q \
   tests/test_mcp_output_contract.py \
   tests/test_mcp_testtool_client.py \
+  tests/test_mcp_batch_report.py \
   tests/test_unified_mcp_input_coercion.py \
   tests/test_unified_contract_doc_paths.py \
-  tests/test_framework_mcp_search.py
+  tests/test_semantic_graph_scope_block.py
 ```
 
 Sau unit test:
@@ -445,7 +422,8 @@ Live smoke MUST có ít nhất:
 3. invalid input error;
 4. capability/storage error;
 5. `tools/list` schema đúng kiểu;
-6. `content` ngắn và `structuredContent` parse được;
+6. `content[0].text` parse được JSON envelope v2 và không có
+   `structuredContent` trên wire;
 7. cả `graph_mcp` và `mind_mcp` dùng cùng envelope/version.
 
 ## Quy tắc cho client và report
@@ -453,12 +431,32 @@ Live smoke MUST có ít nhất:
 - Client MUST đọc `isError` trước.
 - Khi `isError=true`, client MUST raise/route error; không trả error dict như dữ
   liệu thành công.
-- Client MUST ưu tiên `structuredContent`; chỉ parse `content` như fallback cho
-  tool legacy.
-- Report mặc định SHOULD ghi `structuredContent`, trạng thái và summary; không
-  lặp cả serialized `content` lẫn structured object.
+- Client MUST parse JSON từ `content[0].text`; dữ liệu nghiệp vụ nằm ở
+  `envelope.data`, lỗi ở `envelope.error`. Đọc `structuredContent` chỉ là
+  fallback cho server legacy pre-v2.
+- Client ngoài được enroll qua `dev mcp integrate` (Claude Desktop, VS Code,
+  Cursor…): từ v2 dữ liệu nằm trong `content[0].text`, không còn
+  `structuredContent`.
+- Report mặc định SHOULD ghi envelope (hoặc `data`), trạng thái và summary;
+  không lặp cả serialized `content` lẫn envelope một lần nữa.
 - Chế độ raw/full chỉ dùng khi debug protocol và phải ghi rõ output bị lặp vì
   backward compatibility.
+
+## Lịch sử v1 → v2
+
+v1 (1.0) đặt một câu stub ngắn trong `content[0].text`
+(`"Success: N items. Read structuredContent.data."`) và toàn bộ dữ liệu trong
+`structuredContent.data` — lúc đó nhằm chặn thói quen trả JSON string lộn xộn
+trong `content`. Hệ quả thực tế: client chỉ render `content` cho LLM không
+đọc được dữ liệu (agent phải curl thẳng JSON-RPC), còn client forward cả hai
+kênh thì nhận stub vô ích.
+
+v2 (2.0) đảo chính sách một cách chủ đích: single channel — JSON envelope có
+cấu trúc trong `content[0].text`, `structuredContent` bị bỏ hẳn. Kỷ luật mà
+v1 chứng minh vẫn giữ nguyên: envelope bắt buộc qua shared normalizer, error
+có code ổn định, không catalog dump; thêm cap kích thước có cấu trúc để kênh
+duy nhất không bị lạm dụng. Version bump từ 1.0 → 2.0 là breaking change:
+client đọc `structuredContent` phải chuyển sang parse `content[0].text`.
 
 ## Nguồn chuẩn
 
