@@ -1037,17 +1037,11 @@ def _merge_qdrant_results(
     qdrant_url: str,
     project_id: Optional[str] = None,
     embedding_model: Optional[str] = None,
-    sparse_vector: Optional[Tuple[List[int], List[float]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    """Cross-collection merge with ``_collection`` provenance (shared helper).
-
-    ``sparse_vector`` enables hybrid RRF fusion for the whole fan-out when
-    every selected collection supports it (all-or-none inside the helper).
-    """
+    """Cross-collection merge with ``_collection`` provenance (shared helper)."""
     return qdrant_query_support.merge_collections(
         get_code_qdrant_store(), collections, vector, top_k, project_id,
         embedding_model=embedding_model, qdrant_url=qdrant_url,
-        sparse_vector=sparse_vector,
     )
 def _parse_qdrant_collections(payload: Dict[str, Any]) -> List[str]:
     collections = payload.get("result", {}).get("collections", [])
@@ -1710,10 +1704,7 @@ async def tool_semantic_search(
     model_name = model_path or DEFAULT_MODEL
     qdrant_url = qdrant_url or DEFAULT_QDRANT_PATH
     _timing_t0 = time.perf_counter()
-    # Hybrid: dense rides the legacy seam; the sparse half joins only when
-    # EMBED_HYBRID=1 (bge-m3) — flag off keeps this byte-parallel.
     vector = _embed_query(query, model_name)
-    sparse_vector = embed_runtime.query_sparse_only(query, model_name)
     _timing_embed = time.perf_counter() - _timing_t0
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)
@@ -1756,7 +1747,7 @@ async def tool_semantic_search(
     results: Dict[str, Any] = {"mode": mode, "query": query, "results": [], "content_mode": selected_mode}
     if mode == "comment":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name, sparse_vector=sparse_vector)
+        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = comment_errors + errors
@@ -1802,7 +1793,7 @@ async def tool_semantic_search(
         return results
     if mode == "code":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name, sparse_vector=sparse_vector)
+        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = code_errors + errors
@@ -1851,7 +1842,7 @@ async def tool_semantic_search(
     combined_map.update(code_collections)
     combined_collections = list(combined_map)
     _timing_tq = time.perf_counter()
-    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name, sparse_vector=sparse_vector)
+    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
     _timing_qdrant = time.perf_counter() - _timing_tq
     results["results"] = items
     merged_errors = base_errors + comment_errors + code_errors + errors

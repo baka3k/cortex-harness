@@ -38,112 +38,6 @@ PAYLOAD_EXCLUDE_SELECTOR = qmodels.PayloadSelectorExclude(exclude=["text"])
 CONTENT_FIELDS = ("summary", "comment", "code")
 PREVIEW_CHARS = 400
 
-# Hybrid retrieval: the named sparse vector writers declare at creation and
-# the prefetch depth per fusion channel.
-HYBRID_SPARSE_VECTOR_NAME = "sparse"
-DEFAULT_FUSE_K_MIN = 64
-DEFAULT_FUSE_K_MULTIPLIER = 4
-
-
-def fuse_k_from_env(top_k: int) -> int:
-    """Prefetch depth per fusion channel: ``max(4×top_k, 64)``.
-
-    ``EMBED_FUSE_K`` overrides for operators (red team F8: payload grows
-    with channels × fan-out, so the knob stays available).
-    """
-    raw = str(os.environ.get("EMBED_FUSE_K", "")).strip()
-    if raw:
-        try:
-            value = int(raw)
-            if value > 0:
-                return value
-        except ValueError:
-            pass
-    return max(DEFAULT_FUSE_K_MULTIPLIER * max(1, int(top_k)), DEFAULT_FUSE_K_MIN)
-
-
-def fanout_supports_sparse(
-    store: Any,
-    collections: Sequence[Tuple[str, Optional[str]]],
-    qdrant_url: str = "",
-    loader: Any = None,
-) -> bool:
-    """All-or-none fusion capability across a fan-out (red-team F1).
-
-    ``merge_hits`` compares scores directly, so RRF and cosine must never
-    mix inside one fan-out: only when EVERY selected collection declares
-    the sparse vector does the whole fan-out fuse. ``_mess`` hash-vector
-    collections always read as not-hybrid (red-team F6). Requires the
-    ``EMBED_HYBRID`` flag as well — a collection upgraded ahead of a flag
-    flip keeps serving dense-only.
-    """
-    from tools.common.embed_runtime import hybrid_enabled
-    from tools.common.local_qdrant import MESSAGE_COLLECTION_SUFFIX
-
-    if not collections or not hybrid_enabled():
-        return False
-    for name, _vector_name in collections:
-        col = str(name)
-        if col.endswith(MESSAGE_COLLECTION_SUFFIX):
-            return False
-        try:
-            if not qdrant_layout_cache.collection_has_sparse(
-                qdrant_url, col, loader=loader or (lambda store=store: store)
-            ):
-                return False
-        except Exception:  # noqa: BLE001 - probe failure → dense-only fan-out
-            return False
-    return True
-
-
-def hybrid_fusion_query(
-    dense: Sequence[float],
-    sparse: Optional[Tuple[List[int], List[float]]],
-    *,
-    vector_name: Optional[str],
-    top_k: int,
-    query_filter: Any,
-) -> Dict[str, Any]:
-    """``query_points`` kwargs for dense+sparse RRF fusion.
-
-    Both prefetch channels carry the caller's filter (which already
-    excludes the embedding-model sentinel); the dense channel keeps the
-    legacy ``using`` resolution (unnamed default via ``""`` or the named
-    dense vector of legacy layouts), the sparse channel uses the fixed
-    ``sparse`` name. RRF is rank-based, so the two channels' score scales
-    never need to be comparable.
-    """
-    fuse_k = fuse_k_from_env(top_k)
-    prefetch: List[qmodels.Prefetch] = [
-        qmodels.Prefetch(
-            query=list(dense),
-            using=vector_name or "",
-            limit=fuse_k,
-            filter=query_filter,
-        ),
-    ]
-    if sparse:
-        indices, values = sparse
-        prefetch.append(
-            qmodels.Prefetch(
-                query=qmodels.SparseVector(indices=list(indices), values=list(values)),
-                using=HYBRID_SPARSE_VECTOR_NAME,
-                limit=fuse_k,
-                filter=query_filter,
-            ),
-        )
-    hnsw_ef = hnsw_ef_from_env()
-    search_params = qmodels.SearchParams(hnsw_ef=hnsw_ef) if hnsw_ef is not None else None
-    dense_prefetch = prefetch[0]
-    if search_params is not None and dense_prefetch.search_params is None:
-        dense_prefetch.search_params = search_params
-    return {
-        "prefetch": prefetch,
-        "query": qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
-        "limit": int(top_k),
-        "query_filter": query_filter,
-    }
-
 
 def hnsw_ef_from_env() -> Optional[int]:
     """Query-time ``hnsw_ef`` override; unset env → server default."""
@@ -182,8 +76,6 @@ def search_collection(
     project_id: Optional[str] = None,
     query_filter: Any = None,
     embedding_model: Optional[str] = None,
-    sparse_vector: Optional[Tuple[List[int], List[float]]] = None,
-    fusion: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """One narrowed, provenance-tagged vector search against a collection.
 
@@ -191,46 +83,23 @@ def search_collection(
     when ``embedding_model`` is given, a collection stamped by a different
     model yields a structured mismatch entry in ``errors`` (soft warning —
     results are still returned).
-
-    ``sparse_vector`` + ``fusion=True`` switch this one search to dense+sparse
-    RRF fusion (identical response shape; scores become rank-based RRF).
-    ``fusion=None`` (default) auto-fuses when a sparse vector is present AND
-    this collection declares one; fan-out callers pass the all-or-none
-    decision from :func:`fanout_supports_sparse` explicitly.
     """
     from tools.common.project_scope import qdrant_project_filter
 
     if query_filter is None:
         query_filter = qdrant_project_filter(project_id)
     query_filter = _with_sentinel_exclusion(query_filter)
-    if sparse_vector is None:
-        use_fusion = False
-    elif fusion is None:
-        from tools.common.local_qdrant import collection_supports_sparse
-
-        use_fusion = collection_supports_sparse(store, collection)
-    else:
-        use_fusion = bool(fusion)
-    if use_fusion:
-        kwargs = hybrid_fusion_query(
-            vector,
-            sparse_vector,
-            vector_name=vector_name,
-            top_k=top_k,
-            query_filter=query_filter,
-        )
-    else:
-        kwargs: Dict[str, Any] = {}
-        if vector_name:
-            kwargs["using"] = vector_name
-        hnsw_ef = hnsw_ef_from_env()
-        if hnsw_ef is not None:
-            kwargs["search_params"] = qmodels.SearchParams(hnsw_ef=hnsw_ef)
-        kwargs.update({
-            "query": list(vector),
-            "limit": int(top_k),
-            "query_filter": query_filter,
-        })
+    kwargs: Dict[str, Any] = {}
+    if vector_name:
+        kwargs["using"] = vector_name
+    hnsw_ef = hnsw_ef_from_env()
+    if hnsw_ef is not None:
+        kwargs["search_params"] = qmodels.SearchParams(hnsw_ef=hnsw_ef)
+    kwargs.update({
+        "query": list(vector),
+        "limit": int(top_k),
+        "query_filter": query_filter,
+    })
     response = store.query_points(
         collection,
         with_payload=PAYLOAD_EXCLUDE_SELECTOR,
@@ -259,10 +128,9 @@ def merge_hits(
 ) -> List[Dict[str, Any]]:
     """Dedupe by point id keeping the higher score (with its provenance).
 
-    Precondition: every input list was produced with the SAME scoring scale —
-    all-cosine (dense-only fan-out) or all-RRF (fused fan-out). The
-    all-or-none capability gate in :func:`merge_collections` guarantees this;
-    mixing scales would silently corrupt the ranking.
+    Precondition: every input list was produced with the SAME scoring scale
+    (all-cosine across the fan-out). Mixing scales would silently corrupt
+    the ranking.
     """
     combined: Dict[str, Dict[str, Any]] = {}
     for hits in per_collection_hits:
@@ -403,23 +271,13 @@ def merge_collections(
     project_id: Optional[str] = None,
     embedding_model: Optional[str] = None,
     qdrant_url: str = "",
-    sparse_vector: Optional[Tuple[List[int], List[float]]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """Search every (collection, vector_name) and merge to a single top_k.
 
     With ``embedding_model`` set, collections stamped by a different model
     produce a structured ``embedding_model_mismatch`` entry in ``errors`` —
     the search still returns results (soft warning, never a failure).
-
-    Hybrid: when the query carries a sparse vector AND the whole fan-out
-    supports sparse (:func:`fanout_supports_sparse` — all-or-none, red-team
-    F1), every collection runs the fused RRF query; any dense-only member
-    downgrades the ENTIRE fan-out to dense-only so ``merge_hits`` compares
-    one scale.
     """
-    use_fusion = sparse_vector is not None and fanout_supports_sparse(
-        store, collections, qdrant_url=qdrant_url
-    )
     per_collection: List[List[Dict[str, Any]]] = []
     errors: List[Dict[str, str]] = []
     for col, vector_name in collections:
@@ -427,8 +285,6 @@ def merge_collections(
             per_collection.append(
                 search_collection(
                     store, col, vector, vector_name, top_k, project_id,
-                    sparse_vector=sparse_vector,
-                    fusion=use_fusion,
                 )
             )
             mismatch = embedding_marker.mismatch(store, col, embedding_model)

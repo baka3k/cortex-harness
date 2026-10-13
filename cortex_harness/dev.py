@@ -763,10 +763,6 @@ def _code_env_for_process(
         result.setdefault("EMBED_MODEL", str(env["EMBEDDING_MODEL"]))
     if env.get("device"):
         result.setdefault("EMBED_DEVICE", _normalize_embed_device(env["device"]))
-    # Hybrid retrieval flag: config env entries already flow through the
-    # dict copy above; a shell-exported EMBED_HYBRID reaches sync/pilot
-    # subprocesses too (subprocess env replaces os.environ).
-    _pass_through_embed_hybrid(result, env)
     if env.get("BATCH_SIZE"):
         result.setdefault("EMBED_BATCH_SIZE", str(env["BATCH_SIZE"]))
     if env.get("MAX_EMBED_CHARS"):
@@ -797,7 +793,6 @@ def _doc_env_for_process(
     if env.get("device"):
         # doc-tiny reads EMBEDDING_DEVICE (embedding_utils), not EMBED_DEVICE.
         result.setdefault("EMBEDDING_DEVICE", _normalize_embed_device(env["device"]))
-    _pass_through_embed_hybrid(result, env)
     # Per Phase 06 of the unified ingest/query contract plan, the doc
     # server's Qdrant collection is resolved through the ProjectRegistry
     # so it matches the doc graph name (``{project_id}_doc``) by default.
@@ -835,13 +830,6 @@ def _doc_env_for_process(
         result["FALKORDB_GRAPH"] = targets.doc_graph
     _isolate_graph_provider_environment(result, "DOC_GRAPH_PROVIDER")
     return result
-
-
-def _pass_through_embed_hybrid(result: dict, env: dict) -> None:
-    """Forward ``EMBED_HYBRID`` (config env or operator shell) to the child."""
-    hybrid = str(env.get("EMBED_HYBRID") or os.environ.get("EMBED_HYBRID") or "").strip()
-    if hybrid:
-        result.setdefault("EMBED_HYBRID", hybrid)
 
 
 def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
@@ -3905,170 +3893,6 @@ def sync_doc_stop(ctx):
         project_path=project_path,
         process_env=_doc_env_for_process(cfg, project_path),
     )
-
-
-# ── sync gate ────────────────────────────────────────────────────────────────
-
-@sync.command("gate")
-@click.option("--project-dir", default=".", show_default=True)
-@click.option("--collection", default=None,
-              help="Target collection override (default: the project's code "
-                   "collection from config, or <project>_doc with --doc).")
-@click.option("--doc", "doc_mode", is_flag=True,
-              help="Gate the doc collection instead of the code one.")
-@click.option("--queries", "queries_path", type=click.Path(exists=True, dir_okay=False),
-              default=None,
-              help="Paraphrase query-set JSON [{name, class, text, truth_name}]; "
-                   "identifier queries are always derived from the corpus.")
-@click.option("--identifiers", type=int, default=10, show_default=True,
-              help="Corpus-derived identifier queries in the set.")
-@click.option("--top-k", type=int, default=10, show_default=True)
-@click.option("--max-points", type=int, default=0,
-              help="Subsample each corpus to N points (even stride) before "
-                   "encoding — smoke gate for large corpora. 0 = full (default).")
-@click.option("--device", default=None,
-              help="EMBED_DEVICE override (auto/cpu/mps/cuda).")
-@click.option("--out-dir", type=click.Path(file_okay=False), default=None,
-              help="Results directory (default: <project-dir>/.cortext-harness/ab-gate).")
-def sync_gate(project_dir, collection, doc_mode, queries_path, identifiers,
-              top_k, max_points, device, out_dir):
-    """A/B quality gate for hybrid retrieval (EMBED_HYBRID) on the real corpus.
-
-    \b
-    Measures dense-only vs fused RRF on a THROWAWAY clone of the collection —
-    the original is never written and the clone is dropped afterwards — then
-    prints a PASS / NOT PASSED verdict per the enablement runbook
-    (docs/UNIFIED_INGEST_QUERY_CONTRACT.md → "Hybrid retrieval enablement").
-
-    Run this BEFORE flipping EMBED_HYBRID=1 for a project, and re-run it when
-    the corpus changes materially. Each run re-encodes the whole collection
-    (~2.5 min per 362 points on MPS) — a decision tool, not a sync step.
-    """
-    project_path = Path(project_dir).resolve()
-    cfg, _ = _load_active_config(project_path)
-    project = cfg.get("project", {})
-    if doc_mode:
-        process_env = _doc_env_for_process(cfg, project_path)
-    else:
-        process_env = _code_env_for_process(cfg, project_path)
-    # The gate resolves physical collections itself: code mode discovers
-    # per-analyzer ``{project}_{hash}__{parser}_functions`` collections from
-    # the project id (the bare QDRANT_COLLECTION value is a logical registry
-    # name, not a physical collection); doc mode maps to ``{id}_doc``.
-    project_id = str(project.get("doc" if doc_mode else "code")
-                     or project.get("name") or "").strip()
-    if not out_dir:
-        out_dir = str(project_path / HARNESS_CONFIG_DIR.replace("/config", "") / "ab-gate")
-
-    script = CODE_TINY / "scripts" / "ab_hybrid_gate.py"
-    cmd = [
-        _venv_python(CODE_TINY), str(script),
-        "--project-id", project_id,
-        "--identifiers", str(identifiers),
-        "--top-k", str(top_k),
-        "--out-dir", out_dir,
-    ]
-    if max_points:
-        cmd += ["--max-points", str(max_points)]
-    if doc_mode:
-        cmd.append("--doc-mode")
-    if collection:
-        cmd += ["--collection", collection]
-    if queries_path:
-        cmd += ["--queries", str(Path(queries_path).resolve())]
-    if device:
-        cmd += ["--device", device]
-
-    click.echo(f"[gate] project_id={project_id!r}"
-               f"{' (doc)' if doc_mode else ''}  top_k={top_k}  out_dir={out_dir}")
-    click.echo("[gate] the clone re-encode runs per invocation; the original "
-               "collection is never written.")
-    run_env = dict(os.environ)
-    run_env.update({str(key): str(value) for key, value in process_env.items()})
-    proc = subprocess.run(cmd, env=run_env)
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
-
-
-# ── sync backfill ────────────────────────────────────────────────────────────
-
-@sync.command("backfill")
-@click.option("--project-dir", default=".", show_default=True)
-@click.option("--collection", default=None,
-              help="Target collection override (default: the project's single "
-                   "code collection from --project-id, or <project>_doc with "
-                   "--doc; ambiguous projects must pass this explicitly).")
-@click.option("--doc", "doc_mode", is_flag=True,
-              help="Backfill the doc collection instead of the code one.")
-@click.option("--batch-size", type=int, default=32, show_default=True)
-@click.option("--dry-run", is_flag=True,
-              help="Preview the export without dropping anything.")
-@click.option("--yes", is_flag=True,
-              help="Confirm the destructive drop (required to run).")
-@click.option("--force", is_flag=True,
-              help="Re-run even when the collection already has sparse.")
-@click.option("--resume", is_flag=True,
-              help="Continue an interrupted re-upsert from checkpoint.")
-@click.option("--verbose", is_flag=True)
-def sync_backfill(project_dir, collection, doc_mode, batch_size, dry_run,
-                  yes, force, resume, verbose):
-    """Upgrade a dense-only collection to hybrid (dense + named sparse).
-
-    \b
-    The one-time upgrade to run AFTER flipping EMBED_HYBRID=1 in dev.json for
-    a project whose gate (dev sync gate) PASSED: export payloads → drop +
-    recreate with the named sparse vector → re-encode from payload text →
-    stamp hybrid=true. Local Qdrant cannot add a sparse vector in place, so
-    this recreate IS the upgrade path; a payload backup (jsonl) is kept and
-    --resume continues an interrupted re-upsert. Later 'dev sync' runs then
-    write dual vectors as usual — no extra step.
-
-    Cost: a full re-encode of the collection (comparable to one full
-    embedding sync). Never destructive without --yes.
-    """
-    project_path = Path(project_dir).resolve()
-    cfg, _ = _load_active_config(project_path)
-    project = cfg.get("project", {})
-    if doc_mode:
-        process_env = _doc_env_for_process(cfg, project_path)
-    else:
-        process_env = _code_env_for_process(cfg, project_path)
-    project_id = str(project.get("doc" if doc_mode else "code")
-                     or project.get("name") or "").strip()
-
-    script = CODE_TINY / "scripts" / "backfill_hybrid_sparse.py"
-    cmd = [
-        _venv_python(CODE_TINY), str(script),
-        "--project-id", project_id,
-        "--batch-size", str(batch_size),
-    ]
-    if doc_mode:
-        cmd.append("--doc-mode")
-    if collection:
-        cmd += ["--collection", collection]
-    if dry_run:
-        cmd.append("--dry-run")
-    if yes:
-        cmd.append("--yes")
-    if force:
-        cmd.append("--force")
-    if resume:
-        cmd.append("--resume")
-    if verbose:
-        cmd.append("--verbose")
-
-    click.echo(f"[backfill] project_id={project_id!r}"
-               f"{' (doc)' if doc_mode else ''}  "
-               f"mode={'dry-run' if dry_run else ('RESUME' if resume else ('force' if force else 'normal'))}"
-               f"{' CONFIRMED(--yes)' if yes else ''}")
-    if not dry_run and not resume and not yes:
-        click.echo("[backfill] destructive: the collection is dropped and "
-                   "re-encoded. Preview with --dry-run, commit with --yes.")
-    run_env = dict(os.environ)
-    run_env.update({str(key): str(value) for key, value in process_env.items()})
-    proc = subprocess.run(cmd, env=run_env)
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
 
 
 # ── sync code add ─────────────────────────────────────────────────────────────

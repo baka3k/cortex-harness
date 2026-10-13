@@ -217,29 +217,6 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
         return _embed_with_backend
 
 
-def _make_sparse_embedder(model_name: str) -> Optional[Callable[[str], Tuple[List[int], List[float]]]]:
-    """Hybrid sparse query encode, or ``None`` when hybrid doesn't apply.
-
-    Returns a callable only when ``EMBED_HYBRID`` is on for a bge-m3 model;
-    every other configuration keeps the dense-only retrieval pipeline.
-    """
-    try:
-        from tools.common import embed_runtime
-
-        if not embed_runtime.hybrid_enabled(model_name):
-            return None
-
-        def _embed_sparse(text: str) -> Tuple[List[int], List[float]]:
-            return embed_runtime.embed_query_pair(text, model_name)[1]
-
-        return _embed_sparse
-    except Exception as exc:  # noqa: BLE001 - sparse is an enhancement, never a gate
-        logger.warning(
-            "[explore_service] sparse embedder unavailable for %r: %s", model_name, exc,
-        )
-        return None
-
-
 def _is_falkordb_uri(uri: str) -> bool:
     if not uri or "://" not in uri:
         return False
@@ -395,7 +372,6 @@ class ExploreService:
         self._neo4j_db    = neo4j_db or _DEFAULT_GRAPH_DB
         self._retrieval_executor = retrieval_executor or _BoundedRetrievalExecutor()
         self._embedder: Optional[Callable[[str], List[float]]] = None
-        self._sparse_embedder: Optional[Callable[[str], Tuple[List[int], List[float]]]] = None
         self._embedder_loaded = False
         self._embedder_lock = asyncio.Lock()
 
@@ -408,11 +384,6 @@ class ExploreService:
             if not self._embedder_loaded:
                 self._embedder = await self._retrieval_executor.run(
                     lambda: _make_embedder(self._model_name)
-                )
-                # Hybrid retrieval: sparse half of the query pair (None
-                # unless EMBED_HYBRID=1 on a bge-m3 model).
-                self._sparse_embedder = await self._retrieval_executor.run(
-                    lambda: _make_sparse_embedder(self._model_name)
                 )
                 self._embedder_loaded = True
         return self._embedder
@@ -668,7 +639,6 @@ class ExploreService:
             embedder     = embedder,
             graph_driver = graph_driver,
             database     = database,
-            sparse_embedder=self._sparse_embedder,
         )
 
         def _run_sync() -> list:
