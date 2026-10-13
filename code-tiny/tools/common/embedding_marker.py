@@ -19,6 +19,7 @@ in the code-tiny package graph.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 import uuid
@@ -32,10 +33,6 @@ EMBEDDING_MODEL_FIELD = "embedding_model"
 VECTOR_SIZE_FIELD = "vector_size"
 PROJECT_ID_FIELD = "project_id"
 STAMPED_AT_FIELD = "stamped_at"
-# Visibility flag: the collection's writer ran with hybrid retrieval on.
-# NOT a capability source of truth — query-side capability reads the
-# collection's sparse_vectors config (qdrant_layout_cache).
-HYBRID_FIELD = "hybrid"
 
 # Query-side sentinel read cache. Writers always re-probe (use_cache has no
 # effect on enforce); queries reuse the read for a short TTL so a reset in
@@ -45,6 +42,27 @@ _CACHE_MISS = object()
 
 # Private namespace for sentinel point ids only (uuid4, fixed forever).
 PRIVATE_NAMESPACE = uuid.UUID("c1a9d7e2-4b6f-5c3a-9d28-77e0b1a4f5c6")
+
+# ``.../models--ORG--REPO/snapshots/<hash>`` — the HuggingFace cache layout
+# ``resolve_embedding_cache`` hands to SentenceTransformer. Historically the
+# language analyzers stamped this runtime load path instead of the configured
+# repo id, so comparisons must fold both spellings of one physical model back
+# together. Org names never contain ``--``, so the first ``--`` splits org/repo.
+_SNAPSHOT_PATH_RE = re.compile(r".*models--([^/\\]+?)--(.+?)[/\\]snapshots[/\\]")
+
+
+def canonical_model_id(model: Any) -> str:
+    """Normalize a model identity to its repo id (or the value itself).
+
+    A HF snapshot path ``…/models--BAAI--bge-m3/snapshots/<hash>`` folds to
+    ``BAAI/bge-m3``; anything else (repo ids, local dirs, snapshot basenames)
+    passes through untouched — genuinely different models stay distinct.
+    """
+    raw = str(model or "").strip()
+    match = _SNAPSHOT_PATH_RE.match(raw)
+    if match:
+        return f"{match.group(1)}/{match.group(2)}"
+    return raw
 
 _META_CACHE: Dict[str, Any] = {}
 _META_CACHE_LOCK = threading.Lock()
@@ -100,7 +118,6 @@ def sentinel_point(
     embedding_model: str,
     vector_size: int,
     project_id: Optional[str] = None,
-    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Build the sentinel ``{"id", "payload"}`` without writing it.
 
@@ -114,7 +131,6 @@ def sentinel_point(
             EMBEDDING_MODEL_FIELD: str(embedding_model),
             VECTOR_SIZE_FIELD: int(vector_size),
             PROJECT_ID_FIELD: str(project_id or ""),
-            HYBRID_FIELD: bool(hybrid),
             STAMPED_AT_FIELD: datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
     }
@@ -127,7 +143,6 @@ def stamp(
     embedding_model: str,
     vector_size: int,
     project_id: Optional[str] = None,
-    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Write (or refresh) the sentinel point. Invalidates the read cache."""
     payload: Dict[str, Any] = {
@@ -135,7 +150,6 @@ def stamp(
         EMBEDDING_MODEL_FIELD: str(embedding_model),
         VECTOR_SIZE_FIELD: int(vector_size),
         PROJECT_ID_FIELD: str(project_id or ""),
-        HYBRID_FIELD: bool(hybrid),
         STAMPED_AT_FIELD: datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     store.upsert(
@@ -199,13 +213,11 @@ def enforce(
     vector_size: int,
     project_id: Optional[str] = None,
     reset_hint: str = "Re-index the collection (drop + re-ingest) before switching models.",
-    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Chokepoint gate: stamp, re-stamp, or raise.
 
     * no marker → stamp and proceed (fresh or pre-marker collection);
-    * marker matches → proceed (re-stamp once when only the ``hybrid``
-      visibility flag changed, e.g. the operator flipped ``EMBED_HYBRID``);
+    * marker matches → proceed;
     * marker differs but the collection holds *only* the sentinel (a reset
       that kept the collection) → re-stamp and proceed;
     * marker differs otherwise → :class:`EmbeddingModelMismatchError`.
@@ -218,19 +230,9 @@ def enforce(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
-            hybrid=hybrid,
         )
     stamped = str(meta.get(EMBEDDING_MODEL_FIELD) or "")
-    if stamped == str(embedding_model):
-        if bool(meta.get(HYBRID_FIELD, False)) != bool(hybrid):
-            return stamp(
-                store,
-                collection,
-                embedding_model=embedding_model,
-                vector_size=vector_size,
-                project_id=project_id,
-                hybrid=hybrid,
-            )
+    if canonical_model_id(stamped) == canonical_model_id(embedding_model):
         return meta
     if _only_sentinel_left(store, collection):
         return stamp(
@@ -239,7 +241,6 @@ def enforce(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
-            hybrid=hybrid,
         )
     mismatch = {
         "collection": collection,
@@ -274,7 +275,7 @@ def mismatch(
     if not meta:
         return None
     stamped = str(meta.get(EMBEDDING_MODEL_FIELD) or "")
-    if not stamped or stamped == str(embedding_model):
+    if not stamped or canonical_model_id(stamped) == canonical_model_id(embedding_model):
         return None
     return {
         "collection": collection,

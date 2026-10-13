@@ -8,7 +8,6 @@ from typing import Any, Iterable
 
 from tools.common import embed_runtime
 from tools.common.local_qdrant import (
-    collection_supports_sparse,
     delete_by_filter,
     ensure_collection,
     get_code_qdrant_store,
@@ -154,29 +153,9 @@ def sync_qdrant(
         embedding_model=model_identity,
         project_id=result.project_id,
     )
-    # Hybrid: sparse weights for the exact embedded text (same contract as
-    # primary_vector_sync; ~2x embedding compute when enabled). Dense-only
-    # when the collection never declared the sparse vector.
-    sparse_pairs = None
-    if embed_runtime.hybrid_enabled(model_identity) and collection_supports_sparse(
-        store, collection
-    ):
-        from qdrant_client.http import models as qmodels
-
-        sparse_pairs = embed_runtime.encode_sparse(
-            model_identity,
-            [item["text"] for item in documents],
-            device=device,
-        )
     points = []
     for index, (document, vector) in enumerate(zip(documents, vectors)):
         vector_value: Any = vector.tolist()
-        if sparse_pairs is not None:
-            indices, values = sparse_pairs[index]
-            vector_value = {
-                "": vector_value,
-                "sparse": qmodels.SparseVector(indices=list(indices), values=list(values)),
-            }
         points.append(
             {"id": document["id"], "vector": vector_value, "payload": document["payload"]}
         )

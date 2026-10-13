@@ -4,8 +4,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 import unittest
+from shlex import quote as shlex_quote
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -635,6 +637,76 @@ class MakeLifecycleTests(unittest.TestCase):
             stop_tree.assert_called_once_with(101, processes)
             remaining = json.loads(pid_file.read_text(encoding="utf-8"))
             self.assertEqual([record["instance"] for record in remaining], ["crm"])
+
+    def test_stop_process_tree_escalates_to_sigkill_when_sigterm_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            child_pid_file = Path(directory) / "child.pid"
+            child_script = Path(directory) / "child.py"
+            child_script.write_text(
+                "import os, signal, time\n"
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                f"open({str(child_pid_file)!r}, 'w').write(str(os.getpid()))\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            wrapper = subprocess.Popen(
+                ["bash", "-c", f"python3 {shlex_quote(str(child_script))} & wait"]
+            )
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and not child_pid_file.exists():
+                    time.sleep(0.05)
+                child_pid = int(child_pid_file.read_text())
+                processes = {
+                    wrapper.pid: (1, f"bash -c python3 {child_script} & wait"),
+                    child_pid: (wrapper.pid, f"python3 {child_script}"),
+                }
+                with mock.patch.object(LIFECYCLE, "STOP_GRACE_SECONDS", 1.0):
+                    LIFECYCLE.stop_process_tree(wrapper.pid, processes)
+
+                self.assertIsNotNone(wrapper.poll())
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(child_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    self.fail("SIGTERM-ignoring child survived the SIGKILL escalation")
+            finally:
+                wrapper.poll()
+                with mock.patch.object(LIFECYCLE, "STOP_GRACE_SECONDS", 0.0):
+                    LIFECYCLE.stop_process_tree(wrapper.pid, {wrapper.pid: (1, "bash")})
+
+    def test_stop_all_sweep_matches_orphan_python_with_relative_argv(self):
+        root = str(LIFECYCLE.ROOT)
+        processes = {
+            1: (0, "/sbin/launchd"),
+            300: (1, f"bash {root}/code-tiny/mcp.sh --host 127.0.0.1 --port 8788"),
+            301: (300, "Python mcp/unified_mcp.py --transport streamable-http"),
+            302: (1, "vim mcp/unified_mcp.py"),
+        }
+        working_dirs = {301: f"{root}/code-tiny", 302: f"{root}/code-tiny"}
+        with tempfile.TemporaryDirectory() as directory:
+            pid_file = Path(directory) / "pids.json"
+            with mock.patch.object(LIFECYCLE, "PID_FILE", pid_file), mock.patch.object(
+                LIFECYCLE, "process_table", return_value=processes
+            ), mock.patch.object(
+                LIFECYCLE,
+                "_process_cwd",
+                side_effect=lambda pid: working_dirs.get(pid, ""),
+            ), mock.patch.object(LIFECYCLE, "stop_process_tree") as stop_tree:
+                LIFECYCLE.invoke_stop(None)
+
+            stopped = {call.args[0] for call in stop_tree.call_args_list}
+            self.assertEqual(stopped, {300, 301})
+
+    def test_process_cwd_falls_back_to_lsof_output(self):
+        with mock.patch.object(
+            LIFECYCLE.shutil, "which", return_value=None
+        ):
+            self.assertEqual(LIFECYCLE._process_cwd(os.getpid()), "")
 
     def test_macos_terminal_command_uses_osascript(self):
         wrapper = Path("/tmp/cortex launcher.command")

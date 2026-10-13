@@ -14,7 +14,6 @@ CortexHarness fixes this by building a **persistent, queryable knowledge layer**
 
 - **Structural truth** — call graphs, dependencies, type hierarchies, framework routes (not just text)
 - **Semantic understanding** — embeddings for similarity search across code and docs
-- **Hybrid retrieval (opt-in)** — `EMBED_HYBRID=1` adds BGE-M3 learned-sparse vectors fused with dense via RRF; see `docs/UNIFIED_INGEST_QUERY_CONTRACT.md` → "Hybrid retrieval enablement"
 - **Complete context** — one query returns the function, its callers, its framework role, and related documentation
 - **Less token waste** — agents ask the graph instead of stuffing entire files into prompts
 
@@ -235,62 +234,6 @@ Multiple projects share one storage instance with isolated graph/collection name
 | `dev sync code --sync-mode embedding --full-scan` | Embedding-only rebuild |
 | `dev sync doc` | Incremental doc sync (GraphRAG + vectors) |
 | `dev sync doc all` | Full doc sync across all configured doc roots |
-| `dev sync gate` | A/B quality gate for hybrid retrieval on the real corpus (read-only) |
-| `dev sync backfill` | One-time upgrade of a dense-only collection to hybrid (destructive, `--yes` required) |
-
-### Hybrid Retrieval (`EMBED_HYBRID`)
-
-BGE-M3 produces dense and learned-sparse (lexical) vectors. Hybrid mode fuses
-both channels with Reciprocal Rank Fusion at query time. It ships **off** by
-default and is enabled per project through a quality gate — dense-only is
-often already the strongest configuration, so measure before flipping.
-
-**Enablement workflow** (code and doc sides are independent):
-
-```bash
-# 1. A/B gate on the real corpus — read-only: measures a throwaway clone,
-#    never writes the original collection
-dev sync gate                        # code collection(s)
-dev sync gate --doc                  # doc collection
-dev sync gate --max-points 4000      # smoke gate for large corpora (even subsample)
-
-# Verdict per collection: PASS / NOT PASSED
-# (criteria: no ground-truth regression, top-k overlap stable)
-
-# 2. Only on PASS — enable the flag for the side(s) you want, in dev.json:
-#      code.env.EMBED_HYBRID: "1"   and/or   doc.env.EMBED_HYBRID: "1"
-
-# 3. One-time upgrade of the existing dense-only collection:
-dev sync backfill --dry-run          # preview (keeps a payload backup jsonl)
-dev sync backfill --yes              # code collection: drop + recreate + re-encode
-dev sync backfill --doc --yes        # doc collection
-
-# 4. Done — later `dev sync code` / `dev sync doc` runs write dual
-#    (dense + sparse) vectors automatically for the enabled side.
-```
-
-Notes:
-
-- **Code vs doc independence** — the flag applies to whichever `env` block
-  declares it, and each backfill run upgrades exactly one collection. A side
-  without its backfill keeps serving dense-only.
-- **Projects with several code collections** (one per language/parser):
-  `dev sync gate` measures each in turn (overall verdict = worst);
-  `dev sync backfill` refuses to guess and requires `--collection <name>`
-  when more than one matches.
-- **First run on a machine needs the sparse head** (3.5 KB, one-time):
-  `python code-tiny/scripts/prefetch_hybrid_heads.py` — the gate and the
-  backfill fail fast with this hint when it is missing.
-- **Pure-text doc corpora**: the gate derives identifier queries from
-  corpus symbol names; doc collections without them may need an explicit
-  paraphrase set via `--queries queries.json`
-  (format: `[{"name", "class", "text", "truth_name"}]`).
-- **Rollback = remove the flag.** Hybrid collections stay queryable
-  dense-only; no re-ingest needed.
-
-Full runbook and criteria: `docs/UNIFIED_INGEST_QUERY_CONTRACT.md` →
-"Hybrid retrieval enablement".
-
 ### Configuration & Maintenance
 
 | Command | Description |

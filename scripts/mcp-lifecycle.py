@@ -1951,14 +1951,95 @@ def process_table() -> dict[int, tuple[int, str]]:
     return processes
 
 
-def stop_process_tree(pid: int, processes: dict[int, tuple[int, str]]) -> None:
-    children = [child for child, (parent, _) in processes.items() if parent == pid]
-    for child in children:
-        stop_process_tree(child, processes)
+def _process_cwd(pid: int) -> str:
+    """Best-effort working-directory lookup for a live process via lsof."""
+    lsof = shutil.which("lsof")
+    if not lsof:
+        return ""
     try:
-        os.kill(pid, signal.SIGTERM)
+        result = run([lsof, "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for line in result.stdout.splitlines():
+        if line.startswith("n"):
+            return line[1:]
+    return ""
+
+
+def _is_harness_mcp_process(pid: int, command: str) -> bool:
+    """Match a harness MCP process even when its argv lost the absolute root.
+
+    Servers launched through mcp.sh run ``python mcp/unified_mcp.py`` with a
+    relative script path. While the bash wrapper lives, the saved PID record
+    covers it; once the wrapper is gone only the working directory — which
+    stays inside the repository — identifies the orphan. The python-executable
+    guard keeps arbitrary tools that merely sit in the repo (vim, tail, …)
+    out of the sweep.
+    """
+    if not any(marker in command for marker in MCP_PROCESS_MARKERS):
+        return False
+    if str(ROOT) in command:
+        return True
+    try:
+        executable = shlex.split(command)[0]
+    except (ValueError, IndexError):
+        return False
+    if "python" not in Path(executable).name.casefold():
+        return False
+    return str(ROOT) in _process_cwd(pid)
+
+
+STOP_GRACE_SECONDS = 5.0
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
     except ProcessLookupError:
-        return
+        return False
+    except PermissionError:
+        # Signal delivery is denied but the process exists.
+        return True
+    return True
+
+
+def stop_process_tree(pid: int, processes: dict[int, tuple[int, str]]) -> None:
+    """Terminate a process tree, escalating to SIGKILL after a grace period.
+
+    A streamable-http MCP client holding an SSE connection can pin uvicorn in
+    graceful shutdown indefinitely; SIGTERM alone then leaves the server
+    running while its saved PID record goes stale, and the next ``dev stop``
+    can no longer find the orphan (its argv carries a relative script path).
+    Children are signalled before the parent so the tree dies bottom-up.
+    """
+    tree: list[int] = []
+
+    def collect(current: int) -> None:
+        for child, (parent, _) in processes.items():
+            if parent == current:
+                collect(child)
+        tree.append(current)
+
+    collect(pid)
+    for target in tree:
+        try:
+            os.kill(target, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + STOP_GRACE_SECONDS
+    survivors = [target for target in tree if _pid_alive(target)]
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.1)
+        survivors = [target for target in tree if _pid_alive(target)]
+    for target in survivors:
+        print(
+            f"[stop] pid {target} ignored SIGTERM for "
+            f"{STOP_GRACE_SECONDS:.0f}s — sending SIGKILL"
+        )
+        try:
+            os.kill(target, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def read_pid_records() -> list[dict[str, object]]:
@@ -2153,9 +2234,8 @@ def invoke_stop(instance: str | None = None) -> None:
             print(f"[stop] Skipping stale PID record {pid} ({record.get('name', 'unknown')})")
 
     if instance is None:
-        markers = ("code-tiny/mcp.sh", "doc-tiny/mcp.sh", "mcp/unified_mcp.py", "mcp_graph_rag.py")
         for pid, (_, command) in processes.items():
-            if pid != os.getpid() and pid not in stopped and str(ROOT) in command and any(marker in command for marker in markers):
+            if pid != os.getpid() and pid not in stopped and _is_harness_mcp_process(pid, command):
                 print(f"[stop] Stopping MCP process {pid}")
                 stop_process_tree(pid, processes)
         remaining = []

@@ -15,9 +15,6 @@ from huggingface_hub.errors import LocalEntryNotFoundError
 _AUDIT_CONFIGURED = False
 
 
-_BGE_M3_MARKER = "bge-m3"
-
-
 def _missing_files(snapshot: str, model_source: str = "") -> List[str]:
     root = Path(snapshot)
     missing: List[str] = []
@@ -27,16 +24,6 @@ def _missing_files(snapshot: str, model_source: str = "") -> List[str]:
         missing.append("model weights (*.safetensors or pytorch_model*.bin)")
     if not any((root / name).is_file() for name in ("tokenizer.json", "tokenizer.model", "spiece.model", "vocab.txt", "vocab.json")):
         missing.append("tokenizer files")
-    # Hybrid retrieval (EMBED_HYBRID=1) needs the BGE-M3 sparse head beside
-    # the weights — bge-m3 family only, so other families stay untouched by
-    # the flag (their repos never ship the head). Flag off (the default)
-    # keeps this check out so the byte-parallel path never treats its
-    # absence as incompleteness.
-    flag = str(os.environ.get("EMBED_HYBRID", "")).strip().lower()
-    if flag in {"1", "true", "yes", "on"} and _BGE_M3_MARKER in str(model_source or "").lower():
-        if not (root / "sparse_linear.pt").is_file():
-            missing.append("sparse_linear.pt (hybrid retrieval head; run "
-                           "python code-tiny/scripts/prefetch_hybrid_heads.py)")
     return missing
 
 

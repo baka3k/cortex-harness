@@ -2455,7 +2455,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             timeout=args.qdrant_timeout,
             retries=args.qdrant_retries,
             retry_sleep=args.qdrant_retry_sleep,
-            embedding_model=embedder.model_source,
+            embedding_model=embed_runtime.effective_model_identity(args.embed_model),
             project_id=args.project_id,
         )
 

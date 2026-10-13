@@ -451,5 +451,82 @@ class ResetCodeCollectionScriptTests(unittest.TestCase):
             self._run(["--project-id", "proj"])
 
 
+class SnapshotPathIdentityTests(unittest.TestCase):
+    """Analyzers historically stamped the runtime-resolved HF snapshot path
+    (``…/models--BAAI--bge-m3/snapshots/<hash>``) while queries compare the
+    configured repo id — one physical model must not warn as a mismatch."""
+
+    BGE = "BAAI/bge-m3"
+    BGE_SNAPSHOT = (
+        "/Users/x/.cache/huggingface/hub/models--BAAI--bge-m3/"
+        "snapshots/5617a9f61b028005a4858fdac845db406aefb181"
+    )
+
+    def setUp(self) -> None:
+        embedding_marker.reset_sentinel_cache()
+
+    def tearDown(self) -> None:
+        embedding_marker.reset_sentinel_cache()
+
+    def test_canonical_model_id_folds_snapshot_path_to_repo_id(self):
+        fold = embedding_marker.canonical_model_id
+        self.assertEqual(fold(self.BGE_SNAPSHOT), self.BGE)
+        self.assertEqual(fold("hub\\models--BAAI--bge-m3\\snapshots\\abc"), self.BGE)
+        self.assertEqual(fold(self.BGE), self.BGE)
+        self.assertEqual(fold(" /var/models/local-dir "), "/var/models/local-dir")
+        self.assertEqual(fold(None), "")
+        # Genuinely different models stay distinct after folding.
+        self.assertNotEqual(fold(self.BGE_SNAPSHOT), fold(JINA))
+
+    def test_query_repo_id_vs_path_stamped_sentinel_no_warning(self):
+        store = FakeCodeStore()
+        _seed_with_data(store, self.BGE_SNAPSHOT)
+        _, errors = qdrant_query_support.merge_collections(
+            store, [("col", None)], [0.0] * 1024, 5, None,
+            embedding_model=self.BGE,
+        )
+        self.assertEqual([e for e in errors if "embedding_model_mismatch" in e], [])
+
+    def test_query_snapshot_path_vs_repo_id_stamped_sentinel_no_warning(self):
+        store = FakeCodeStore()
+        _seed_with_data(store, self.BGE)
+        _, errors = qdrant_query_support.merge_collections(
+            store, [("col", None)], [0.0] * 1024, 5, None,
+            embedding_model=self.BGE_SNAPSHOT,
+        )
+        self.assertEqual([e for e in errors if "embedding_model_mismatch" in e], [])
+
+    def test_real_mismatch_still_warns_over_snapshot_stamp(self):
+        store = FakeCodeStore()
+        _seed_with_data(store, self.BGE_SNAPSHOT)
+        _, errors = qdrant_query_support.merge_collections(
+            store, [("col", None)], [0.0] * 1024, 5, None,
+            embedding_model=QWEN3,
+        )
+        mismatch_entries = [e for e in errors if "embedding_model_mismatch" in e]
+        self.assertEqual(len(mismatch_entries), 1)
+
+    def test_writer_accepts_repo_id_resync_on_path_stamped_collection(self):
+        from tools.common.local_qdrant import ensure_collection
+
+        store = FakeCodeStore()
+        _seed_with_data(store, self.BGE_SNAPSHOT)
+        # Same physical model via the repo id — must not hard-fail the sync.
+        ensure_collection(store, "col", 1024, embedding_model=self.BGE)
+        self.assertEqual(
+            embedding_marker.check(store, "col")["embedding_model"], self.BGE_SNAPSHOT
+        )
+
+    def test_writer_snapshot_path_resync_on_repo_id_stamped_collection(self):
+        from tools.common.local_qdrant import ensure_collection
+
+        store = FakeCodeStore()
+        _seed_with_data(store, self.BGE)
+        ensure_collection(store, "col", 1024, embedding_model=self.BGE_SNAPSHOT)
+        self.assertEqual(
+            embedding_marker.check(store, "col")["embedding_model"], self.BGE
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

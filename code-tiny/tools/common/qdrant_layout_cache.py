@@ -24,7 +24,7 @@ from tools.common.local_qdrant import vector_sizes
 DEFAULT_TTL_SECONDS = 300
 MAX_ENTRIES = 64
 
-_META_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, int], bool]] = {}
+_META_CACHE: Dict[Tuple[str, str], Tuple[float, Dict[str, int]]] = {}
 _LIST_CACHE: Dict[str, Tuple[float, List[str]]] = {}
 _LOCK = threading.Lock()
 
@@ -65,19 +65,11 @@ def _evict_overflow_locked() -> None:
         _LIST_CACHE.pop(oldest_key, None)
 
 
-def _load_meta(url: str, collection: str, loader: Optional[Any]) -> Tuple[Dict[str, int], bool]:
-    """Fresh read: (named/default vector sizes, has_named_sparse)."""
+def _load_meta(url: str, collection: str, loader: Optional[Any]) -> Dict[str, int]:
+    """Fresh read: named/default vector sizes."""
     store = _resolve_store(url, loader)
     info = store.get_collection_info(collection)
-    sizes = vector_sizes(info)
-    sparse = getattr(
-        getattr(getattr(info, "config", None), "params", None), "sparse_vectors", None
-    )
-    if sparse is None:
-        from tools.common.local_qdrant import collection_has_sparse
-
-        sparse = collection_has_sparse(info)
-    return sizes, bool(sparse)
+    return vector_sizes(info)
 
 
 def get_collection_meta(
@@ -86,43 +78,26 @@ def get_collection_meta(
     loader: Optional[Any] = None,
 ) -> Dict[str, int]:
     """Named/default vector sizes for one collection (cached per url+name)."""
-    return _cached_meta(url, collection, loader)[0]
+    return _cached_meta(url, collection, loader)
 
 
-def collection_has_sparse(
-    url: str,
-    collection: str,
-    loader: Optional[Any] = None,
-) -> bool:
-    """Whether the collection declares any named sparse vector (cached).
-
-    Query-side hybrid capability reads this — same TTL cache as the vector
-    sizes, one ``get_collection_info`` round-trip serves both.
-    """
-    return _cached_meta(url, collection, loader)[1]
-
-
-def _cached_meta(
-    url: str,
-    collection: str,
-    loader: Optional[Any],
-) -> Tuple[Dict[str, int], bool]:
+def _cached_meta(url: str, collection: str, loader: Optional[Any]) -> Dict[str, int]:
     key = (str(url or ""), str(collection))
     now = time.monotonic()
     if not _cache_disabled():
         with _LOCK:
             entry = _META_CACHE.get(key)
             if entry is not None and now - entry[0] <= _ttl_seconds():
-                return dict(entry[1]), bool(entry[2])
-    sizes, has_sparse = _load_meta(url, collection, loader)
+                return dict(entry[1])
+    sizes = _load_meta(url, collection, loader)
     # An empty sizes dict is useless to every consumer (it reads as "no
     # matching vector size") — don't pin it for a full TTL; refetch next
     # time instead.
     if not _cache_disabled() and sizes:
         with _LOCK:
-            _META_CACHE[key] = (now, dict(sizes), bool(has_sparse))
+            _META_CACHE[key] = (now, dict(sizes))
             _evict_overflow_locked()
-    return sizes, has_sparse
+    return sizes
 
 
 def list_collections(url: str, loader: Optional[Any] = None) -> List[str]:
