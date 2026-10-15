@@ -123,6 +123,10 @@ COMMON_SCAN_EXCLUDE: frozenset[str] = frozenset(
         ".aws-sam",
         "cdk.out",
 
+        # Generated code output (protobuf/grpc, OpenAPI, ORMs, ...)
+        "gen",
+        "generated",
+
         # Generic build output
         "build",
         "out",
@@ -131,6 +135,7 @@ COMMON_SCAN_EXCLUDE: frozenset[str] = frozenset(
         "bin",
         "obj",
         "artifacts",
+        "bundle",
 
         # Dependencies
         "vendor",
@@ -151,6 +156,12 @@ COMMON_SCAN_EXCLUDE: frozenset[str] = frozenset(
         ".cache",
         ".scannerwork",
         ".cortext-harness",
+
+        # Self-contained sidecar runtimes (models / packed binaries / their
+        # own build output); they are separate deployables, never part of the
+        # host app's source graph. Names match at any depth.
+        "hy-mt",
+        "vieneu-tts",
     }
 )
 

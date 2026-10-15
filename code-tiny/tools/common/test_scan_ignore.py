@@ -169,7 +169,9 @@ class ExtraIgnoreDirsTests(unittest.TestCase):
         ):
             scan_ignore.reset_extra_ignore_dirs()
             self.assertTrue(scan_ignore.is_excluded_dir("gen-ui"))
-            self.assertFalse(scan_ignore.is_excluded_dir("generated"))  # no match
+            # "generated" is now a built-in exclude; use a non-matching,
+            # non-builtin name to prove the glob itself didn't match.
+            self.assertFalse(scan_ignore.is_excluded_dir("generic"))  # no match
 
     def test_blank_and_unset_env_change_nothing(self) -> None:
         with unittest.mock.patch.dict("os.environ", {}, clear=False):
