@@ -18,6 +18,7 @@ from tools.common.project_scope import (
     PROJECT_ID_NORMALIZED_FIELD,
     project_id_lookup_key,
 )
+from tools.common.scan_ignore import is_excluded_dir
 
 
 SUPPORTED_PARSERS: Set[str] = supported_parsers()
@@ -45,6 +46,11 @@ _PARSER_EXTENSIONS: Dict[str, Tuple[str, ...]] = {
 }
 
 _CALL_PATTERN = re.compile(r"(?P<callee>[A-Za-z_][A-Za-z0-9_:.>]*)\s*\((?P<args>[^)]*)\)")
+
+# Minified/generated bundles pack megabytes into a single line and
+# _CALL_PATTERN backtracks quadratically on them; no real message call
+# lives on a line this long, so scanning stops before the blow-up.
+_MAX_MESSAGE_LINE_CHARS = 4000
 
 
 @dataclass(frozen=True)
@@ -182,7 +188,8 @@ def _iter_parser_files(root: str, parser: str) -> List[str]:
     extensions = _PARSER_EXTENSIONS.get(parser, ())
     if not extensions:
         return files
-    for dirpath, _, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if not is_excluded_dir(name)]
         for name in filenames:
             lower = name.lower()
             if any(lower.endswith(ext) for ext in extensions):
@@ -228,7 +235,7 @@ def collect_messages_for_parser(
         sender_map = _extract_sender_by_line(lines, detector)
         for line_idx, line_text in enumerate(lines, start=1):
             stripped = line_text.strip()
-            if not stripped:
+            if not stripped or len(stripped) > _MAX_MESSAGE_LINE_CHARS:
                 continue
             for match in _CALL_PATTERN.finditer(stripped):
                 callee = match.group("callee").strip()
