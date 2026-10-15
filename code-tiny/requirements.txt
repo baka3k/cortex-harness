@@ -23,7 +23,10 @@ transformers>=4.51,<4.56 # FOR WINDOW
 # transformers # FOR UBUNTU, MACOS...etc
 
 # Existing dependencies
-tree-sitter
+# tree-sitter-dart 0.1.0 corrupts the heap under tree-sitter 0.26 (native
+# GC crash in every Dart analyzer run); 0.25.x is the newest core that both
+# loads the grammar (ABI 15) and stays clean — 0.23/0.24 reject the grammar.
+tree-sitter>=0.25,<0.26
 tree-sitter-rust
 tree-sitter-go
 tree-sitter-languages
