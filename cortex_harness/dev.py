@@ -289,12 +289,16 @@ _SCAN_EXCLUDE = {
     "node_modules",
     # java/kotlin/android build
     "build", "out", "target", ".gradle",
+    # generated code output (protobuf/grpc, OpenAPI, ORMs, ...)
+    "gen", "generated",
     # compiled output (generic)
-    "dist", "bin", "obj",
+    "dist", "bin", "obj", "bundle",
     # ios
     "Pods", "DerivedData",
     # go / php
     "vendor",
+    # self-contained sidecar runtimes (never part of the host app's source graph)
+    "hy-mt", "vieneu-tts",
     # ide & tool caches
     ".idea", ".vscode", ".cache", ".cortext-harness",
 }
