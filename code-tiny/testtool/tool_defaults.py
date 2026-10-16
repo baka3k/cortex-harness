@@ -213,7 +213,7 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "get_module_architecture_summary": {
         "project_id": "YOUR_PROJECT_ID",
         "parser_type": "YOUR_PARSER_TYPE",
-        "limit": 50,
+        "item_limit": 10,
     },
     "get_project_special_files": {
         "project_id": "YOUR_PROJECT_ID",

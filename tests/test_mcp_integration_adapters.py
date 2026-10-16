@@ -153,6 +153,10 @@ def test_doc_wrapper_falls_back_to_local(tmp_path: Path, monkeypatch) -> None:
     from doc_local_qdrant import get_document_qdrant_store
     from cortex_harness.storage import LocalQdrantStore
 
+    # Pin the data home so the fallback never resolves to the shared default
+    # instance, whose lease a running MCP server may legitimately hold.
+    monkeypatch.setenv("CORTEX_DATA_HOME", str(tmp_path / "data-home"))
+
     store = get_document_qdrant_store(project_root=tmp_path)
     assert isinstance(store, LocalQdrantStore)
 
@@ -258,10 +262,14 @@ def test_code_wrapper_legacy_url_locator_rejected(tmp_path: Path) -> None:
         get_code_qdrant_store(locator="http://example.invalid:6333", project_root=tmp_path)
 
 
-def test_code_wrapper_local_default(tmp_path: Path) -> None:
+def test_code_wrapper_local_default(tmp_path: Path, monkeypatch) -> None:
     """No project_id and no URL locator → local store."""
     from tools.common.local_qdrant import get_code_qdrant_store
     from cortex_harness.storage import LocalQdrantStore
+
+    # Pin the data home so the fallback never resolves to the shared default
+    # instance, whose lease a running MCP server may legitimately hold.
+    monkeypatch.setenv("CORTEX_DATA_HOME", str(tmp_path / "data-home"))
 
     store = get_code_qdrant_store(project_root=tmp_path)
     assert isinstance(store, LocalQdrantStore)

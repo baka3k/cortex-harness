@@ -184,6 +184,29 @@ class AndroidRepoScopeTest(_BackendCase):
         )
 
 
+class AndroidPayloadDispatchRegressionTest(_BackendCase):
+    """Same fn(payload=merged) regression as the cplus file: the repo value
+    must reach the Cypher params from the payload, not the kwarg."""
+
+    module = android_mcp
+
+    async def test_trace_flow_repo_rides_payload_only(self) -> None:
+        await android_mcp.tool_trace_flow(start_id="a", end_id="b", payload={"repo": "s3"})
+        query, params = self.h.main_call
+        self.assertEqual(params["repo"], "s3")
+        self.assertEqual(params["repo_suffix"], "/s3")
+        self.assertIn("a.repo = $repo", query)
+        self.assertIn("b.repo = $repo", query)
+
+    async def test_listup_symbols_repo_rides_payload_only(self) -> None:
+        await android_mcp.tool_listup_symbols_matching_file_path(
+            modules=["svc"], payload={"repo": "s3"}
+        )
+        query, params = self.h.main_call
+        self.assertEqual(params["repo"], "s3")
+        self.assertIn("n.repo = $repo", query)
+
+
 class JavaRepoScopeTest(_BackendCase):
     module = java_mcp
 

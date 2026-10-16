@@ -112,7 +112,7 @@ class _ScriptableQdrant:
 
 
 @pytest.fixture(autouse=True)
-def _scriptable_qdrant(monkeypatch) -> Any:
+def _scriptable_qdrant(monkeypatch, tmp_path_factory) -> Any:
     """Patch every ``QdrantClient(...)`` call site to a single test double."""
     _ScriptableQdrant._shared = None
     fake = _ScriptableQdrant
@@ -121,6 +121,12 @@ def _scriptable_qdrant(monkeypatch) -> Any:
     monkeypatch.setattr("qdrant_client.QdrantClient", fake)
     monkeypatch.setattr("cortex_harness.storage.qdrant.QdrantClient", fake)
     monkeypatch.setattr("cortex_harness.storage.qdrant_remote.QdrantClient", fake)
+    # Pin the data home so local-store construction never resolves to the
+    # shared default instance, whose lease a running MCP server may
+    # legitimately hold.
+    monkeypatch.setenv(
+        "CORTEX_DATA_HOME", str(tmp_path_factory.mktemp("parity-data-home"))
+    )
     # Drop cached remote/local clients so a fresh construction reaches the fake.
     from cortex_harness.storage import qdrant as qdrant_mod
     from cortex_harness.storage import qdrant_remote as qremote_mod
