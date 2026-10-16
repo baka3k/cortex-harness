@@ -32,7 +32,22 @@ from tools.graph.core.provider_contract import (
     normalize_graph_provider_name,
 )
 from tools.graph.core.shared_runtime import get_shared_graph_driver
-from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
+from tools.common.project_scope import (
+    prepare_project_scope_parameters,
+    prepare_repo_scope_parameters,
+    qdrant_project_filter,
+    repo_scope_predicate,
+)
+from repo_scope_support import (
+    REPO_POSTFETCH_FACTOR,
+    filter_vector_hits_by_repo,
+    vector_repo_scope_result,
+    repo_scope_empty_warnings,
+    graph_anchors_in_repo as _graph_anchors_in_repo,
+    raw_node_matches_repo as _raw_node_matches_repo,
+    repo_scope_block as _repo_scope_block,
+    repo_scope_state as _repo_scope_state,
+)
 from tools.common import embed_runtime
 from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common import qdrant_query_support
@@ -821,7 +836,9 @@ async def _resolve_trace_rel_types(
 
 
 async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
-    params = prepare_project_scope_parameters(query, params)
+    params = prepare_repo_scope_parameters(
+        prepare_project_scope_parameters(query, params)
+    )
     last_error: Optional[Exception] = None
     requested = [db for db in dbs if db]
     available = await _list_databases()
@@ -887,6 +904,18 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
     raise RuntimeError("No database candidates available")
 
 
+async def _repo_scope_empty_warnings(
+    repo_value: Optional[str],
+    applied: bool,
+    has_results: bool,
+    db_candidates: List[str],
+) -> List[str]:
+    """Warning for a scoped query that matched nothing (RR2 follow-up)."""
+    return await repo_scope_empty_warnings(
+        _run_cypher_first, repo_value, applied, has_results, db_candidates
+    )
+
+
 async def _list_databases() -> List[str]:
     driver = await _get_graph_driver()
     if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"}:
@@ -923,10 +952,12 @@ async def _query_ipc_messages_from_graph(
     receiver_queries: List[str],
     db_candidates: List[str],
     project_id: Optional[str],
+    repo: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    query = """
+    query = f"""
     MATCH (m:Message)
     WHERE ($project_id = '' OR coalesce(m.project_id_normalized, '') = $project_id)
+      AND {repo_scope_predicate('m')}
       AND (
         size($sender_queries) = 0
         OR any(q IN $sender_queries WHERE toLower(coalesce(m.sender, '')) CONTAINS toLower(q))
@@ -954,6 +985,7 @@ async def _query_ipc_messages_from_graph(
         query,
         {
             "project_id": (project_id or "").strip(),
+            "repo": repo,
             "sender_queries": sender_queries,
             "receiver_queries": receiver_queries,
         },
@@ -1056,7 +1088,9 @@ async def tool_semantic_search(
     graph_rel_types: Optional[Any] = None,
     graph_limit: int = 50,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
 ) -> Any:
+    repo_value, repo_applied = _repo_scope_state(repo)
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required.")
@@ -1106,7 +1140,10 @@ async def tool_semantic_search(
     results: Dict[str, Any] = {"mode": mode, "query": query, "results": [], "content_mode": selected_mode}
     if mode == "comment":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
+        fetch_k = int(top_k) * REPO_POSTFETCH_FACTOR if repo_applied else top_k
+        items, errors = _merge_qdrant_results(comment_collections, vector, fetch_k, qdrant_url, project_id, embedding_model=model_name)
+        items, _repo_pre_hits = filter_vector_hits_by_repo(items, repo_value, repo_applied)
+        results["scope"], results["warnings"] = vector_repo_scope_result(repo_value, repo_applied, _repo_pre_hits, len(items), fetch_k)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = comment_errors + errors
@@ -1143,7 +1180,10 @@ async def tool_semantic_search(
         return results
     if mode == "code":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
+        fetch_k = int(top_k) * REPO_POSTFETCH_FACTOR if repo_applied else top_k
+        items, errors = _merge_qdrant_results(code_collections, vector, fetch_k, qdrant_url, project_id, embedding_model=model_name)
+        items, _repo_pre_hits = filter_vector_hits_by_repo(items, repo_value, repo_applied)
+        results["scope"], results["warnings"] = vector_repo_scope_result(repo_value, repo_applied, _repo_pre_hits, len(items), fetch_k)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = code_errors + errors
@@ -1183,7 +1223,10 @@ async def tool_semantic_search(
     combined_map.update(code_collections)
     combined_collections = list(combined_map)
     _timing_tq = time.perf_counter()
-    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
+    fetch_k = int(top_k) * REPO_POSTFETCH_FACTOR if repo_applied else top_k
+    items, errors = _merge_qdrant_results(combined_collections, vector, fetch_k, qdrant_url, project_id, embedding_model=model_name)
+    items, _repo_pre_hits = filter_vector_hits_by_repo(items, repo_value, repo_applied)
+    results["scope"], results["warnings"] = vector_repo_scope_result(repo_value, repo_applied, _repo_pre_hits, len(items), fetch_k)
     _timing_qdrant = time.perf_counter() - _timing_tq
     results["results"] = items
     merged_errors = base_errors + comment_errors + code_errors + errors
@@ -1236,31 +1279,51 @@ async def tool_list_qdrant_collections(
 async def tool_get_symbol(
     node_id: Any,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     node_id = str(node_id)
-    
+
     driver = await _get_graph_driver()
     for db_candidate in candidates:
         try:
             node = await driver.find_node_by_id(node_id, project_id=project_id, database=db_candidate)
-            if node:
+            if node and _raw_node_matches_repo(node, repo_value):
                 mode = _normalize_content_mode(content_mode)
-                return {"db": db_candidate, "found": True, "node": _record_node(node, mode, include_raw_fields)}
+                return {
+                    "db": db_candidate,
+                    "found": True,
+                    "node": _record_node(node, mode, include_raw_fields),
+                    "scope": _repo_scope_block(repo_value, repo_applied),
+                    "warnings": [],
+                }
+            if node:
+                # Node exists but belongs to another repo (RR2 anchor
+                # check) — keep probing the remaining candidates.
+                continue
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             raise
     # A miss is a result, not a failure: report it structurally so callers
     # treat it as an empty hit instead of an error.
+    warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, False, candidates)
+    miss_reason = (
+        f"Node {node_id} not found in any db matching repo '{repo_value}'."
+        if repo_applied
+        else f"Node {node_id} not found in any db."
+    )
     return {
         "db": None,
         "found": False,
         "node": None,
-        "message": f"Node {node_id} not found in any db.",
+        "message": miss_reason,
+        "scope": _repo_scope_block(repo_value, repo_applied, warnings),
+        "warnings": warnings,
     }
 
 
@@ -1271,21 +1334,24 @@ async def tool_get_symbol(
 async def tool_list_possible_calls(
     limit: int = 200,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
-    
+    repo_value, repo_applied = _repo_scope_state(repo)
+
     driver = await _get_graph_driver()
     mode = _normalize_content_mode(content_mode)
-    
+
     for db_candidate in db_candidates:
         try:
             raw_nodes, raw_edges = await driver.list_possible_calls(
                 limit=int(limit),
                 project_id=project_id,
-                database=db_candidate
+                database=db_candidate,
+                repo=repo_value,
             )
             if raw_nodes or raw_edges:
                 nodes_dict: Dict[str, Dict[str, Any]] = {}
@@ -1293,12 +1359,25 @@ async def tool_list_possible_calls(
                     recorded = _record_node(node, mode, include_raw_fields)
                     nodes_dict[recorded["id"]] = recorded
                 edges = [_record_rel(edge) for edge in raw_edges]
-                return {"db": db_candidate, "nodes": list(nodes_dict.values()), "edges": edges}
+                return {
+                    "db": db_candidate,
+                    "nodes": list(nodes_dict.values()),
+                    "edges": edges,
+                    "scope": _repo_scope_block(repo_value, repo_applied),
+                    "warnings": [],
+                }
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             raise
-    return {"db": db_candidates[0] if db_candidates else None, "nodes": [], "edges": []}
+    warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, False, db_candidates)
+    return {
+        "db": db_candidates[0] if db_candidates else None,
+        "nodes": [],
+        "edges": [],
+        "scope": _repo_scope_block(repo_value, repo_applied, warnings),
+        "warnings": warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1308,19 +1387,37 @@ async def tool_list_possible_calls(
 async def tool_get_node_details(
     node_ids: List[Any],
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     ids = [str(item) for item in node_ids]
-    query = "MATCH (n) WHERE n.id IN $ids AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) RETURN n"
-    used_db, results = await _run_cypher_first(query, {"ids": ids, "project_id": project_id}, candidates)
+    query = (
+        "MATCH (n) WHERE n.id IN $ids "
+        "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('n')} "
+        "RETURN n"
+    )
+    used_db, results = await _run_cypher_first(query, {"ids": ids, "project_id": project_id, "repo": repo}, candidates)
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), candidates)
     if results:
         mode = _normalize_content_mode(content_mode)
         nodes = [_record_node(item["n"], mode, include_raw_fields) for item in results]
-        return {"db": used_db, "nodes": nodes}
-    return {"db": used_db, "nodes": []}
+        return {
+            "db": used_db,
+            "nodes": nodes,
+            "scope": _repo_scope_block(repo_value, repo_applied),
+            "warnings": [],
+        }
+    return {
+        "db": used_db,
+        "nodes": [],
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1336,9 +1433,11 @@ async def tool_query_subgraph(
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     function_id = str(function_id)
     depth = _normalize_depth(max_depth, default=2, max_limit=10)
     direction = direction.lower()
@@ -1356,31 +1455,35 @@ async def tool_query_subgraph(
                 query = (
                     f"MATCH (f:Function) WHERE f.id = $id "
                     "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
+                    f"AND {repo_scope_predicate('f')} "
                     f"MATCH p=(n:Function)-{rel_pattern}->(f) RETURN p"
                 )
-                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id}, [candidate])
+                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id, "repo": repo}, [candidate])
                 paths.extend([row["p"] for row in result])
             elif direction in {"outgoing", "out"}:
                 query = (
                     f"MATCH (f:Function) WHERE f.id = $id "
                     "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
+                    f"AND {repo_scope_predicate('f')} "
                     f"MATCH p=(f)-{rel_pattern}->(n:Function) RETURN p"
                 )
-                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id}, [candidate])
+                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id, "repo": repo}, [candidate])
                 paths.extend([row["p"] for row in result])
             else:
                 query_out = (
                     f"MATCH (f:Function) WHERE f.id = $id "
                     "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
+                    f"AND {repo_scope_predicate('f')} "
                     f"MATCH p=(f)-{rel_pattern}->(n:Function) RETURN p"
                 )
                 query_in = (
                     f"MATCH (f:Function) WHERE f.id = $id "
                     "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
+                    f"AND {repo_scope_predicate('f')} "
                     f"MATCH p=(n:Function)-{rel_pattern}->(f) RETURN p"
                 )
-                _, result_out = await _run_cypher_first(query_out, {"id": function_id, "project_id": project_id}, [candidate])
-                _, result_in = await _run_cypher_first(query_in, {"id": function_id, "project_id": project_id}, [candidate])
+                _, result_out = await _run_cypher_first(query_out, {"id": function_id, "project_id": project_id, "repo": repo}, [candidate])
+                _, result_in = await _run_cypher_first(query_in, {"id": function_id, "project_id": project_id, "repo": repo}, [candidate])
                 paths.extend([row["p"] for row in result_out])
                 paths.extend([row["p"] for row in result_in])
             graph = _paths_to_graph(
@@ -1388,7 +1491,12 @@ async def tool_query_subgraph(
                 content_mode=content_mode or "auto",
                 include_raw_fields=include_raw_fields,
             )
+            if not _graph_anchors_in_repo(graph, [function_id], repo_value):
+                # Anchor lives in another repo — keep probing (RR2).
+                continue
             graph["db"] = candidate
+            graph["scope"] = _repo_scope_block(repo_value, repo_applied)
+            graph["warnings"] = []
             return graph
         except Exception as exc:
             last_error = exc
@@ -1413,9 +1521,11 @@ async def tool_find_paths(
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     start_id = str(start_function_id)
     end_id = str(end_function_id)
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
@@ -1428,12 +1538,16 @@ async def tool_find_paths(
     query = (
         f"MATCH (a:Function) WHERE a.id = $start "
         "AND ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized) "
+        # RR2 anchor rule: both endpoints are user-addressed ids.
+        f"AND {repo_scope_predicate('a')} "
         f"MATCH (b:Function) WHERE b.id = $end "
         "AND ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('b')} "
         "AND a.id <> b.id "
         f"MATCH p=(a)-{rel_pattern}->(b) RETURN p ORDER BY length(p) LIMIT 1"
     )
-    used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id}, candidates)
+    used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id, "repo": repo}, candidates)
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(result), candidates)
     if result:
         paths = [row["p"] for row in result]
         graph = _paths_to_graph(
@@ -1442,6 +1556,8 @@ async def tool_find_paths(
             include_raw_fields=include_raw_fields,
         )
         graph["db"] = used_db
+        graph["scope"] = _repo_scope_block(repo_value, repo_applied)
+        graph["warnings"] = []
         return graph
     # No connecting path is an empty result, not an error.
     return {
@@ -1449,6 +1565,8 @@ async def tool_find_paths(
         "nodes": [],
         "edges": [],
         "reason": "no_path_found",
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
     }
 
 
@@ -1463,6 +1581,7 @@ async def tool_find_path_between_module(
     include_possible: bool = False,
     include_fp: bool = False,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1472,6 +1591,7 @@ async def tool_find_path_between_module(
         raise ValueError("source_modules and target_modules must be non-empty lists.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
     rel_types = ["CALLS"]
     if include_possible:
@@ -1493,11 +1613,14 @@ async def tool_find_path_between_module(
         "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
         "AND ($project_id IS NULL OR s.project_id_normalized STARTS WITH $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized STARTS WITH $project_id_normalized) "
+        # RR2 anchor rule: repo filters the traversal origin (s) only.
+        f"AND {repo_scope_predicate('s')} "
         "AND s.id <> t.id "
         f"MATCH p=(s)-{rel_pattern}->(t) "
         "RETURN p ORDER BY length(p) LIMIT 10"
     )
-    used_db, results = await _run_cypher_first(query, {"sources": source_modules, "targets": target_modules, "project_id": project_id}, db_candidates)
+    used_db, results = await _run_cypher_first(query, {"sources": source_modules, "targets": target_modules, "project_id": project_id, "repo": repo}, db_candidates)
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     paths = [row["p"] for row in results]
     graph = _paths_to_graph(
         paths,
@@ -1505,6 +1628,8 @@ async def tool_find_path_between_module(
         include_raw_fields=include_raw_fields,
     )
     graph["db"] = used_db
+    graph["scope"] = _repo_scope_block(repo_value, repo_applied, repo_warnings)
+    graph["warnings"] = repo_warnings
     return graph
 
 
@@ -1517,6 +1642,7 @@ async def tool_listup_symbols_matching_file_path(
     node_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1525,6 +1651,7 @@ async def tool_listup_symbols_matching_file_path(
         raise ValueError("modules must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     
     # Build node type filter
     if node_types:
@@ -1539,12 +1666,19 @@ async def tool_listup_symbols_matching_file_path(
         "toLower(coalesce(n.file_path, '')) CONTAINS toLower(token) OR "
         "toLower(coalesce(n.path, '')) CONTAINS toLower(token)) "
         "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('n')} "
         "RETURN n"
     )
-    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id, "repo": repo}, db_candidates)
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
-    return {"db": used_db, "symbols": nodes}
+    return {
+        "db": used_db,
+        "symbols": nodes,
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1554,6 +1688,7 @@ async def tool_listup_symbols_matching_file_path(
 async def tool_listup_class_matching_path(
     class_names: List[str],
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1562,17 +1697,20 @@ async def tool_listup_class_matching_path(
         raise ValueError("class_names must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     cypher = (
         "MATCH (c) "
         "WHERE (c:Class OR c:Type) "
         "AND any(token IN $classes WHERE "
         "toLower(c.name) CONTAINS toLower(token) OR toLower(c.qualified_name) CONTAINS toLower(token)) "
         "AND ($project_id IS NULL OR c.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('c')} "
         "OPTIONAL MATCH (c)-[:DECLARES]->(f:Function) "
         "WHERE ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN c, f"
     )
-    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id, "repo": repo}, db_candidates)
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     classes_seen: Dict[str, Dict[str, Any]] = {}
     functions: List[Dict[str, Any]] = []
@@ -1582,7 +1720,13 @@ async def tool_listup_class_matching_path(
             classes_seen[c_rec["id"]] = c_rec
         if row.get("f") is not None:
             functions.append(_record_node(row["f"], mode, include_raw_fields))
-    return {"db": used_db, "classes": list(classes_seen.values()), "functions": functions}
+    return {
+        "db": used_db,
+        "classes": list(classes_seen.values()),
+        "functions": functions,
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1596,6 +1740,7 @@ async def tool_list_up_entrypoint(
     modules: List[str],
     limit: int = 200,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1604,22 +1749,30 @@ async def tool_list_up_entrypoint(
         raise ValueError("modules must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     cypher = (
         "MATCH (caller:Function)-[:CALLS]->(f:Function) "
         "WHERE any(token IN $modules WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower(token)) "
         "AND none(token IN $modules WHERE toLower(coalesce(caller.file_path, '')) CONTAINS toLower(token)) "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
         "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('f')} "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         cypher,
-        {"modules": modules, "limit": int(limit), "project_id": project_id},
+        {"modules": modules, "limit": int(limit), "project_id": project_id, "repo": repo},
         db_candidates,
     )
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     functions = [_record_node(row["f"], mode, include_raw_fields) for row in results]
-    return {"db": used_db, "functions": functions}
+    return {
+        "db": used_db,
+        "functions": functions,
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1630,11 +1783,13 @@ async def tool_search_functions(
     query: str,
     limit: int = 50,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
     fallback_cypher = (
         "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Package OR n:Namespace OR n:File "
@@ -1642,6 +1797,7 @@ async def tool_search_functions(
         "AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q "
         "OR toLower(coalesce(n.qualified_name, '')) CONTAINS q) "
         "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('n')} "
         "RETURN n LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
@@ -1650,30 +1806,38 @@ async def tool_search_functions(
         "WHERE (node:Function OR node:Class OR node:Type OR node:Package OR node:Namespace OR node:File "
         "OR node:Field OR node:Alias OR node:Template OR node:FunctionType OR node:Event OR node:Project) "
         "AND ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('node')} "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit), "project_id": project_id},
+                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit), "project_id": project_id},
+            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
             db_candidates,
         )
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
     ids = [node.get("id") for node in nodes if node.get("id")]
-    return {"db": used_db, "results": nodes, "ids": ids}
+    return {
+        "db": used_db,
+        "results": nodes,
+        "ids": ids,
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1684,42 +1848,56 @@ async def tool_search_by_code(
     query: str,
     limit: int = 50,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
         raise ValueError("query is required.")
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) RETURN n LIMIT $limit"
+    fallback_cypher = (
+        "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) "
+        "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('n')} "
+        "RETURN n LIMIT $limit"
+    )
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         "WHERE ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized) "
+        f"AND {repo_scope_predicate('node')} "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit), "project_id": project_id},
+                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit), "project_id": project_id},
+            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
             db_candidates,
         )
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
-    return {"db": used_db, "results": nodes}
+    return {
+        "db": used_db,
+        "results": nodes,
+        "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+        "warnings": repo_warnings,
+    }
 
 
 @mcp_server.tool(
@@ -1779,6 +1957,7 @@ async def tool_get_ipc_message(
     senders: Optional[Any] = None,
     receivers: Optional[Any] = None,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
 ) -> List[Any]:
     sender_queries = _normalize_string_list(sender)
     receiver_queries = _normalize_string_list(receiver)
@@ -1804,6 +1983,7 @@ async def tool_get_ipc_message(
             receiver_queries=receiver_queries,
             db_candidates=db_candidates,
             project_id=project_id,
+            repo=repo,
         )
     except Exception as exc:
         graph_error = str(exc)
@@ -1859,6 +2039,7 @@ async def tool_trace_flow(
     top_k: Optional[int] = None,
     debug: bool = False,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1866,6 +2047,7 @@ async def tool_trace_flow(
         raise ValueError("start_id is required.")
     candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     rel_value = rel_types if rel_types is not None else relationship_types
     resolved_rel_types = await _resolve_trace_rel_types(rel_value, candidates)
     depth = _normalize_depth(max_depth, default=6, max_limit=20)
@@ -1879,27 +2061,41 @@ async def tool_trace_flow(
         query = (
             "MATCH (a {id: $start}) "
             "WHERE ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized) "
+            # RR2 anchor rule: both endpoints are user-addressed ids.
+            f"AND {repo_scope_predicate('a')} "
             "MATCH (b {id: $end}) "
             "WHERE ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized) "
+            f"AND {repo_scope_predicate('b')} "
             f"MATCH p=(a){rel_match}(b) "
             "RETURN p ORDER BY length(p) LIMIT 1"
         )
-        used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id}, candidates)
+        used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id, "repo": repo}, candidates)
         if not result:
             # Same graceful contract as the no-end-id branch: an unconnected
             # pair is an empty result, not a tool failure.
-            return {"db": used_db, "nodes": [], "edges": [], "direction": direction, "rel_types": resolved_rel_types, "max_depth": depth, "reason": "no_path"}
+            repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, False, candidates)
+            return {
+                "db": used_db, "nodes": [], "edges": [], "direction": direction, "rel_types": resolved_rel_types, "max_depth": depth, "reason": "no_path",
+                "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+                "warnings": repo_warnings,
+            }
         paths = [row["p"] for row in result]
     else:
         query = (
             "MATCH (a {id: $start}) "
             "WHERE ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized) "
+            f"AND {repo_scope_predicate('a')} "
             f"MATCH p=(a){rel_match}(n) "
             "RETURN p LIMIT $limit"
         )
-        used_db, result = await _run_cypher_first(query, {"start": start_id, "limit": limit, "project_id": project_id}, candidates)
+        used_db, result = await _run_cypher_first(query, {"start": start_id, "limit": limit, "project_id": project_id, "repo": repo}, candidates)
         if not result:
-            return {"db": used_db, "nodes": [], "edges": [], "direction": direction, "rel_types": resolved_rel_types, "max_depth": depth, "reason": "no_path"}
+            repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, False, candidates)
+            return {
+                "db": used_db, "nodes": [], "edges": [], "direction": direction, "rel_types": resolved_rel_types, "max_depth": depth, "reason": "no_path",
+                "scope": _repo_scope_block(repo_value, repo_applied, repo_warnings),
+                "warnings": repo_warnings,
+            }
         paths = [row["p"] for row in result]
 
     graph = _paths_to_graph(paths, content_mode=content_mode or "auto", include_raw_fields=include_raw_fields)
@@ -1907,6 +2103,8 @@ async def tool_trace_flow(
     graph["direction"] = direction
     graph["rel_types"] = resolved_rel_types
     graph["max_depth"] = depth
+    graph["scope"] = _repo_scope_block(repo_value, repo_applied)
+    graph["warnings"] = []
     return graph
 
 
@@ -1929,6 +2127,7 @@ async def tool_trace_flow_between_module(
     limit: int = 10,
     top_k: Optional[int] = None,
     project_id: Optional[str] = None,
+    repo: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1938,6 +2137,7 @@ async def tool_trace_flow_between_module(
         raise ValueError("source_modules and target_modules must be non-empty lists.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    repo_value, repo_applied = _repo_scope_state(repo)
     rel_value = rel_types if rel_types is not None else relationship_types
     resolved_rel_types = await _resolve_trace_rel_types(rel_value, db_candidates)
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
@@ -1958,25 +2158,30 @@ async def tool_trace_flow_between_module(
         "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
         "AND ($project_id IS NULL OR s.project_id_normalized STARTS WITH $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized STARTS WITH $project_id_normalized) "
+        # RR2 anchor rule: repo filters the traversal origin (s) only.
+        f"AND {repo_scope_predicate('s')} "
         "AND s.id <> t.id "
         f"MATCH p=(s){rel_match}(t) "
         "RETURN p ORDER BY length(p) LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
-        query, {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id}, db_candidates
+        query, {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo}, db_candidates
     )
     if not results and direction not in {"both", "any", "undirected"}:
         rel_match_both = _build_rel_match(resolved_rel_types, depth, "both")
         fallback_query = query.replace(f"(s){rel_match}(t)", f"(s){rel_match_both}(t)")
         used_db, results = await _run_cypher_first(
-            fallback_query, {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id}, db_candidates
+            fallback_query, {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo}, db_candidates
         )
+    repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     paths = [row["p"] for row in results]
     graph = _paths_to_graph(paths, content_mode=content_mode or "auto", include_raw_fields=include_raw_fields)
     graph["db"] = used_db
     graph["direction"] = direction
     graph["rel_types"] = resolved_rel_types
     graph["max_depth"] = depth
+    graph["scope"] = _repo_scope_block(repo_value, repo_applied, repo_warnings)
+    graph["warnings"] = repo_warnings
     return graph
 
 

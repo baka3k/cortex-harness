@@ -202,3 +202,120 @@ def test_graph_backends_use_shared_provider_default_and_hyper_graph():
         source = backend.read_text(encoding="utf-8")
         assert "normalize_graph_provider_name(value)" in source, backend
         assert 'or "hyper_graph"' in source, backend
+
+
+# ── Repo-scope acceptance gate (plan 261016-1100 phase 05) ───────────────
+
+# Tools that intentionally do NOT take ``repo`` (RR surface exclusions —
+# docs/REPO_QUERY_RULES.md mirrors this list):
+#   * annotate_node            — write path (R6 mirror)
+#   * list_* / inspect_*       — metadata/contract tools
+#   * get_project_* / get_public_apis / get_endpoints / get_framework_context
+#                              — ProjectModule/ApiEndpoint labels carry no repo
+#   * compute_scc / topological_sort / plan_dependency_order
+#                              — operate on caller-provided nodes/edges only
+#   * reconstruct_flow         — pure JSON reshaping, no graph read
+#   * find_screen_workflows    — queries live in tools/ts/workflow_finder.py
+#                                (deferred with the writer integration)
+#   * analyze_workflow_impact / find_workflows_containing
+#                              — :Workflow nodes carry no repo property
+_REPO_EXCLUDED_UNIFIED_TOOLS = frozenset(
+    {
+        "annotate_node",
+        "list_databases",
+        "list_qdrant_collections",
+        "list_parsers",
+        "inspect_parser_capabilities",
+        "list_mcp_functions",
+        "get_project_modules",
+        "get_public_apis",
+        "get_endpoints",
+        "get_module_architecture_summary",
+        "get_project_special_files",
+        "get_framework_context",
+        "compute_scc",
+        "topological_sort",
+        "plan_dependency_order",
+        "reconstruct_flow",
+        "find_screen_workflows",
+        "analyze_workflow_impact",
+        "find_workflows_containing",
+    }
+)
+
+
+def _live_tool_properties() -> tuple[object, dict[str, set[str]]]:
+    import asyncio
+    import sys
+
+    sys.path.insert(0, str(ROOT / "code-tiny" / "mcp"))
+    import unified_mcp  # noqa: E402
+
+    async def _props():
+        live = await unified_mcp.mcp_server.list_tools()
+        return {
+            tool.name: set(tool.parameters.get("properties", {}).keys())
+            for tool in live
+        }
+
+    return unified_mcp, asyncio.run(_props())
+
+
+def test_repo_scope_acceptance_gate_live_schema():
+    """Every query-read tool exposes ``repo``; every other tool does not.
+
+    A missing ``repo`` on a query tool is a BUG (the param would be dropped
+    by schema validation), not a skip. The required set is derived from the
+    registry minus the documented exclusion list, so adding a new query tool
+    without ``repo`` fails here until it is either given the param or added
+    to the exclusion list with a reason.
+    """
+    unified_mcp, properties_by_name = _live_tool_properties()
+    registered = set(properties_by_name)
+    expected_required = {
+        name
+        for name in unified_mcp._UNIFIED_TOOL_NAMES
+        if name not in _REPO_EXCLUDED_UNIFIED_TOOLS
+    }
+    assert registered >= unified_mcp._UNIFIED_TOOL_NAMES, (
+        f"unified registry missing tools: {sorted(unified_mcp._UNIFIED_TOOL_NAMES - registered)}"
+    )
+
+    missing_repo = {}
+    for tool_name in sorted(expected_required):
+        props = properties_by_name[tool_name]
+        if "repo" not in props:
+            missing_repo[tool_name] = sorted(props)
+    assert not missing_repo, f"query tools without repo param: {missing_repo}"
+
+    leaking_repo = {}
+    for tool_name in sorted(_REPO_EXCLUDED_UNIFIED_TOOLS):
+        props = properties_by_name.get(tool_name, set())
+        if "repo" in props:
+            leaking_repo[tool_name] = sorted(props)
+    assert not leaking_repo, f"excluded tools expose repo: {leaking_repo}"
+
+
+def test_repo_scope_catalog_matches_live_schema():
+    """Catalog entries advertising ``repo`` must be exactly the live tools
+    that accept it (catalog ↔ signature consistency)."""
+    catalog = _catalog()
+    advertising = {
+        entry["name"]
+        for entry in catalog
+        if any(item.get("name") == "repo" for item in entry.get("inputs", []))
+    }
+    unified_mcp, properties_by_name = _live_tool_properties()
+    live_with_repo = {
+        name for name, props in properties_by_name.items() if "repo" in props
+    }
+    # Only compare over the unified surface (java_mcp-only catalog entries
+    # are dev-launcher tools that never register here).
+    comparable = advertising & unified_mcp._UNIFIED_TOOL_NAMES
+    assert comparable <= live_with_repo, (
+        f"catalog advertises repo but live schema lacks it: {sorted(comparable - live_with_repo)}"
+    )
+    unexpected = live_with_repo - advertising
+    assert not unexpected, (
+        f"live schema has repo but catalog does not advertise it: {sorted(unexpected)}"
+    )

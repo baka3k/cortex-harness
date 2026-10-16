@@ -12,6 +12,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from tools.graph.core.base import GraphDriver
 from tools.graph.core.provider_contract import normalize_graph_direction
+from tools.common.project_scope import (
+    prepare_repo_scope_parameters,
+    repo_scope_predicate,
+)
 from tools.graph.writer.query_contract import RelationshipGroup
 
 
@@ -116,6 +120,7 @@ class CypherGraphDriver(GraphDriver):
         project_id: Optional[str] = None,
         database: Optional[str] = None,
         limit: int = 10,
+        repo: Optional[str] = None,
     ) -> List[Any]:
         """Find directed function paths using syntax supported by both providers."""
 
@@ -123,20 +128,25 @@ class CypherGraphDriver(GraphDriver):
         cypher = f"""
         MATCH (a:Function) WHERE a.id = $start
           AND ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized)
+          AND {repo_scope_predicate('a')}
         MATCH (b:Function) WHERE b.id = $end
           AND ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized)
+          AND {repo_scope_predicate('b')}
         AND a.id <> b.id
         MATCH p=(a)-{rel_pattern}->(b)
         RETURN p ORDER BY length(p) LIMIT $limit
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {
-                "start": start_id,
-                "end": end_id,
-                "project_id": project_id,
-                "limit": int(limit),
-            },
+            prepare_repo_scope_parameters(
+                {
+                    "start": start_id,
+                    "end": end_id,
+                    "project_id": project_id,
+                    "limit": int(limit),
+                    "repo": repo,
+                }
+            ),
             database,
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -149,6 +159,7 @@ class CypherGraphDriver(GraphDriver):
         max_depth: int = 2,
         project_id: Optional[str] = None,
         database: Optional[str] = None,
+        repo: Optional[str] = None,
     ) -> List[Any]:
         direction = normalize_graph_direction(direction)
         rel_pattern = f"[:{'|'.join(relationship_types)}*1..{max_depth}]"
@@ -162,12 +173,15 @@ class CypherGraphDriver(GraphDriver):
         cypher = f"""
         MATCH (f:Function) WHERE f.id = $id
           AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized)
+          AND {repo_scope_predicate('f')}
         MATCH p=(f){pattern}(n)
         RETURN p
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"id": function_id, "project_id": project_id},
+            prepare_repo_scope_parameters(
+                {"id": function_id, "project_id": project_id, "repo": repo}
+            ),
             database,
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -182,6 +196,7 @@ class CypherGraphDriver(GraphDriver):
         direction: str = "out",
         project_id: Optional[str] = None,
         database: Optional[str] = None,
+        repo: Optional[str] = None,
     ) -> List[Any]:
         paths = await self._find_module_paths_directed(
             source_modules,
@@ -192,6 +207,7 @@ class CypherGraphDriver(GraphDriver):
             direction,
             project_id,
             database,
+            repo,
         )
         if not paths and direction.lower() not in {"both", "any", "undirected"}:
             paths = await self._find_module_paths_directed(
@@ -203,6 +219,7 @@ class CypherGraphDriver(GraphDriver):
                 "both",
                 project_id,
                 database,
+                repo,
             )
         return paths
 
@@ -216,6 +233,7 @@ class CypherGraphDriver(GraphDriver):
         direction: str,
         project_id: Optional[str] = None,
         database: Optional[str] = None,
+        repo: Optional[str] = None,
     ) -> List[Any]:
         rel_types_str = "|".join(relationship_types)
         normalized_direction = normalize_graph_direction(direction)
@@ -235,6 +253,7 @@ class CypherGraphDriver(GraphDriver):
             toLower(coalesce(sf.path, '')) CONTAINS token OR
             toLower(coalesce(sf.file_path, '')) CONTAINS token)
           AND ($project_id IS NULL OR s.project_id_normalized STARTS WITH $project_id_normalized)
+          AND {repo_scope_predicate('s')}
         AND any(token IN targets WHERE
             toLower(coalesce(t.file_path, '')) CONTAINS token OR
             toLower(coalesce(tf.path, '')) CONTAINS token OR
@@ -247,12 +266,15 @@ class CypherGraphDriver(GraphDriver):
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {
-                "sources": source_modules,
-                "targets": target_modules,
-                "limit": limit,
-                "project_id": project_id,
-            },
+            prepare_repo_scope_parameters(
+                {
+                    "sources": source_modules,
+                    "targets": target_modules,
+                    "limit": limit,
+                    "project_id": project_id,
+                    "repo": repo,
+                }
+            ),
             database,
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -262,17 +284,21 @@ class CypherGraphDriver(GraphDriver):
         limit: int = 200,
         project_id: Optional[str] = None,
         database: Optional[str] = None,
+        repo: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         cypher = """
         MATCH (a:Function)-[r:POSSIBLE_CALLS]->(b:Function)
         WHERE ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized)
         AND ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized)
+        AND """ + repo_scope_predicate("a") + """
         RETURN a, b, r
         LIMIT $limit
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"limit": limit, "project_id": project_id},
+            prepare_repo_scope_parameters(
+                {"limit": limit, "project_id": project_id, "repo": repo}
+            ),
             database,
         )
         nodes: List[Dict[str, Any]] = []
