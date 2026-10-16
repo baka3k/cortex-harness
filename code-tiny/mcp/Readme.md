@@ -31,6 +31,12 @@ Core input contract (this supersedes older guidance):
 - **Omitting `project_id` means "query every registered project"** (unscoped
   fan-out). Omitting `parser_type` on a search tool fans the query out across
   all query engines and merges the results.
+- **`repo` (optional, string) narrows results inside the graph.** Query-read
+  tools accept it; blank/omitted searches every repo. Match is exact or
+  `/`-suffix segment (`"s3"` matches `/Users/x/s3` and `projA/s3`, never
+  `xs3`); only anchor/result nodes are filtered — traversal neighbors stay
+  visible. Responses carry a `scope` block + `warnings` mirror. See
+  `docs/REPO_QUERY_RULES.md`.
 
 See `docs/PROJECT_REGISTRY.md` and `docs/UNIFIED_INGEST_QUERY_CONTRACT.md` at
 the repository root for the authoritative contract documents.

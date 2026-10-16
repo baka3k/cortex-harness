@@ -29,6 +29,26 @@ _PROJECT_SCOPE_PARAMETER_KEYS = frozenset(
     }
 )
 
+REPO_SCOPE_PARAMETER_KEYS = ("repo",)
+REPO_SUFFIX_PARAMETER = "repo_suffix"
+
+__all__ = [
+    "PROJECT_ID_NORMALIZED_FIELD",
+    "REPO_SCOPE_PARAMETER_KEYS",
+    "REPO_SUFFIX_PARAMETER",
+    "enrich_project_scope",
+    "matches_project_scope",
+    "matches_repo_scope",
+    "normalize_project_id",
+    "prepare_project_scope_parameters",
+    "prepare_repo_scope_parameters",
+    "project_id_lookup_key",
+    "project_id_scope_keys",
+    "qdrant_project_filter",
+    "registered_project_scope_ids",
+    "repo_scope_predicate",
+]
+
 
 def normalize_project_id(value: Any) -> Optional[str]:
     """Return a non-empty project id, or ``None`` for an unscoped query."""
@@ -178,3 +198,77 @@ def matches_project_scope(
         candidate.get(PROJECT_ID_NORMALIZED_FIELD, candidate.get("project_id"))
     )
     return bool(candidate_key) and candidate_key.startswith(query_key)
+
+
+def repo_scope_predicate(alias: str) -> str:
+    """Return the standard ``repo`` scope predicate for a node alias.
+
+    The fragment is the Cypher twin of :func:`matches_repo_scope` (rule RR3
+    of ``docs/REPO_QUERY_RULES.md``): a node matches when its ``repo``
+    equals the requested value exactly or ends with ``/`` + value, so both
+    stored flavors (absolute path and ``{project}/{basename}``) are covered
+    without matching accidental basename prefixes (``s3`` must not match
+    ``xs3``). Call sites concatenate it after their ``AND``; the ``$repo`` /
+    ``$repo_suffix`` parameters come from :func:`prepare_repo_scope_parameters`.
+
+    The unscoped test is ``$repo = ''`` — NOT ``$repo IS NULL`` — on
+    purpose: LadybugDB binds a ``None`` parameter as BOOL, so an
+    ``$repo IS NULL OR n.repo = $repo`` fragment types ``$repo`` as BOOL and
+    the string comparison then fails at runtime. Binding ``''`` keeps every
+    reference STRING on all three backends. (The ``project_id`` predicate
+    only survives NULL binding because its IS NULL branch names a different
+    parameter than the comparison branch.)
+
+    ``alias`` is a static Cypher identifier interpolated verbatim — user
+    values only ever travel through parameters, never through this fragment.
+    """
+    return (
+        f"(${REPO_SCOPE_PARAMETER_KEYS[0]} = '' OR {alias}.repo"
+        f" = ${REPO_SCOPE_PARAMETER_KEYS[0]} OR {alias}.repo"
+        f" ENDS WITH ${REPO_SUFFIX_PARAMETER})"
+    )
+
+
+def prepare_repo_scope_parameters(
+    parameters: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Prepare graph parameters for the optional ``repo`` scope predicate.
+
+    Mirrors the ``*_normalized`` mechanism of
+    :func:`prepare_project_scope_parameters`: when the parameters carry a
+    ``repo`` key, the value is normalized (blank → ``''``) and the sibling
+    ``repo_suffix`` parameter (``"/" + repo``) is injected for the
+    ``ENDS WITH`` branch of :func:`repo_scope_predicate` — the suffix is
+    precomputed here because Cypher string concatenation inside the
+    predicate is not portable across all three backends.
+
+    An absent ``repo`` key injects nothing. An unscoped ``repo`` binds the
+    empty string (never ``None`` — see :func:`repo_scope_predicate` for the
+    LadybugDB BOOL-binding constraint) and the predicate's ``= ''`` branch
+    makes the whole filter a no-op.
+    """
+    prepared = dict(parameters or {})
+    if "repo" not in prepared:
+        return prepared
+    repo = normalize_project_id(prepared.get("repo")) or ""
+    prepared["repo"] = repo
+    prepared[REPO_SUFFIX_PARAMETER] = f"/{repo}" if repo else ""
+    return prepared
+
+
+def matches_repo_scope(value: Any, repo: Any) -> bool:
+    """Python twin of the Cypher ``repo`` scope predicate (RR3/RR5).
+
+    ``repo`` ``None``/blank is an unscoped query and matches every value.
+    An empty/missing node value (``repo=""`` — "belongs to an unknown
+    repo") never matches a scoped query. Otherwise the value matches when
+    it equals the requested repo exactly or ends with ``/`` + repo, the
+    same exact-or-suffix rule :func:`repo_scope_predicate` encodes.
+    """
+    requested = normalize_project_id(repo)
+    if requested is None:
+        return True
+    node_repo = str(value) if value is not None else ""
+    if not node_repo:
+        return False
+    return node_repo == requested or node_repo.endswith(f"/{requested}")

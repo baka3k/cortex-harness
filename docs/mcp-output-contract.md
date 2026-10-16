@@ -323,6 +323,26 @@ sạch trả `mode:"unscoped"`, `warnings: []`.
 Toán tử: `dev doctor` có nhóm **scope drift** (warn-only) báo shard lạ /
 declared-but-absent / shard rỗng / config JSON hỏng.
 
+### Scope block (`repo`, code server)
+
+Code-side query tools nhận thêm `repo` (optional, string) theo
+[`docs/REPO_QUERY_RULES.md`](./REPO_QUERY_RULES.md) — response trả block
+`scope` additive trong `data` + `warnings` mirror ở top-of-data (envelope
+v2 không đổi, shape mirror mind-side nhưng tối giản):
+
+| Field | Kiểu | Ý nghĩa |
+|---|---|---|
+| `scope.repo` | `string \| null` | Giá trị đã normalize của request (null = unscoped). |
+| `scope.filter_applied` | `bool` | `false` = predicate no-op, tìm tất cả repo. |
+| `scope.pre_filter_hits` | `int` | (chỉ vector: `semantic_search`, `explore_graph`) số hit trước post-filter. |
+| `scope.post_filter_hits` | `int` | (chỉ vector) số hit sau post-filter. |
+| `scope.warnings` | `list[string]` | Scoped-rỗng: `"repo '<x>' matched 0 nodes. Known repo values: …"` (≤5, query phụ chỉ chạy nhánh rỗng); vector over-fetch cạn: gợi ý tăng `top_k` hoặc thu hẹp bằng `project_id` + `repo`. |
+
+`get_ipc_message` trả bare list nên chỉ có predicate, không scope block.
+Trên unified fan-out, `scope` được promote từ parser đầu tiên thành công và
+`warnings` gộp-dedupe. Acceptance gate:
+`tests/test_unified_mcp_wrapper_signatures.py::test_repo_scope_acceptance_gate_live_schema`.
+
 ### Pagination
 
 Tool có thể trả nhiều dữ liệu SHOULD dùng:

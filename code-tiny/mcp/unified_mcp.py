@@ -64,6 +64,14 @@ android_backend = _load_module("android_backend", ROOT_DIR / "android" / "androi
 cplus_backend = _load_module("cplus_backend", ROOT_DIR / "cplus" / "cplus_mcp.py")
 fast_backend = _load_module("fast_backend", ROOT_DIR / "fastmcp_server.py")
 
+from repo_scope_support import (
+    REPO_POSTFETCH_FACTOR,
+    filter_vector_hits_by_repo,
+    matches_repo_scope,
+    repo_scope_block as _repo_scope_block,
+    repo_scope_state as _repo_scope_state,
+    vector_repo_scope_result,
+)
 from tool_metadata import build_catalog  # noqa: E402
 from framework_registry import (  # noqa: E402
     CAPABILITY_CONTRACT_VERSION,
@@ -78,7 +86,12 @@ from framework_registry import (  # noqa: E402
     servlet_active_generation_predicate,
     text_search_properties,
 )
-from tools.common.project_scope import project_id_lookup_key  # noqa: E402
+from tools.common.project_scope import (  # noqa: E402
+    prepare_repo_scope_parameters,
+    project_id_lookup_key,
+    repo_scope_predicate,
+)
+from repo_scope_support import repo_scope_empty_warnings as _repo_scope_empty_warnings_impl
 from tools.common.project_registry import (  # noqa: E402
     ProjectNotRegisteredError,
     ProjectRegistryError,
@@ -251,6 +264,7 @@ _CATALOG_PARAM_DESCRIPTIONS: Dict[str, str] = {
     "debug": "Include debugging details in the response.",
     "include_possible": "Include POSSIBLE_CALLS edges.",
     "include_fp": "Include CALLS_FUNCTION_POINTER edges.",
+    "repo": "Optional repo filter: exact or '/'-suffix match (omit for all repos).",
 }
 
 
@@ -1268,9 +1282,28 @@ def _merge_fanout_results(
         for key, value in payload.items():
             if key in _FANOUT_DIAGNOSTIC_KEYS or key in _FANOUT_SINGLE_RESULT_KEYS:
                 continue
+            if key == "warnings":
+                # Merged separately below: warnings are plain strings (the
+                # repo scope hint), tagging them as result items would both
+                # break the documented list[str] shape and crash the
+                # string-dedupe on dict entries.
+                continue
             if isinstance(value, list) and key not in seen_list_keys:
                 seen_list_keys.add(key)
                 list_keys.append(key)
+
+    repo_warnings: List[str] = []
+    seen_warnings: set = set()
+    for parser in successful_parsers:
+        payload = parser_results[parser] or {}
+        if not isinstance(payload, dict):
+            continue
+        for warning in payload.get("warnings") or []:
+            text = warning if isinstance(warning, str) else str(warning)
+            if text not in seen_warnings:
+                seen_warnings.add(text)
+                repo_warnings.append(text)
+    merged["warnings"] = repo_warnings
 
     dedup_removed = 0
     for key in list_keys:
@@ -1479,6 +1512,14 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         # summary is the union of per-parser summaries — keep it light.
         if isinstance(result, dict):
             result.setdefault("capability", _capability_summary(None, None))
+            # Repo scope: every backend echoes the same requested value, so
+            # promote the first successful parser's scope block; warnings
+            # may differ per engine (the known-repos hint), dedupe them.
+            for parser in result.get("parsers_searched") or []:
+                per_parser = (result.get("parser_results") or {}).get(parser)
+                if isinstance(per_parser, dict) and isinstance(per_parser.get("scope"), dict):
+                    result.setdefault("scope", per_parser["scope"])
+                    break
         return result
     backend_name = _resolve_backend_name(selected_parser)
     framework = framework_for_parser(merged.get("parser_type"))
@@ -1693,6 +1734,7 @@ async def tool_explore_graph(
     debug:      bool = False,
     parser_type: str = "",
     project_id: str = "",
+    repo: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Intent-aware graph search combining semantic + keyword + graph expansion.
@@ -1778,9 +1820,14 @@ async def tool_explore_graph(
         elif not matched:
             active_db = _resolve_graph_database(project_id=project_id or None)
             resolved_collection = resolved_collection or project_id
+    # RR5: Qdrant match filters cannot express suffix matching, so a scoped
+    # explore over-fetches (capped at the service's top_k ceiling of 100) and
+    # post-filters matched nodes in Python with the shared repo predicate.
+    repo_value, repo_applied = _repo_scope_state(repo)
+    fetch_k = min(100, k * REPO_POSTFETCH_FACTOR) if repo_applied else k
     result = await service.explore(
         query      = q,
-        top_k      = k,
+        top_k      = fetch_k,
         mode       = effective_mode,
         db         = active_db,
         collection = resolved_collection,
@@ -1790,6 +1837,36 @@ async def tool_explore_graph(
         searchable_properties= list(text_search_properties(capability.name)) if capability else None,
         project_id = project_id or None,
     )
+    if repo_applied:
+        matched = result.get("matched_nodes") or []
+        pre_hits = len(matched)
+        result["matched_nodes"] = [
+            node
+            for node in matched
+            if matches_repo_scope((node.get("properties") or {}).get("repo"), repo_value)
+        ]
+        result["entry_points"] = [
+            node
+            for node in result.get("entry_points") or []
+            if matches_repo_scope((node.get("properties") or {}).get("repo"), repo_value)
+        ]
+        result["scope"], explore_warnings = vector_repo_scope_result(
+            repo_value, True, pre_hits, len(result["matched_nodes"]), fetch_k
+        )
+        result["warnings"] = explore_warnings
+    else:
+        matched_count = len(result.get("matched_nodes") or [])
+        result.setdefault(
+            "scope",
+            {
+                "repo": None,
+                "filter_applied": False,
+                "pre_filter_hits": matched_count,
+                "post_filter_hits": matched_count,
+                "warnings": [],
+            },
+        )
+        result.setdefault("warnings", [])
     result.pop("backend", None)
     result["query_engine"] = query_engine_for_backend(backend_name)
     result["capability"] = _capability_summary(selected_parser, backend_name)
@@ -1900,6 +1977,34 @@ def _resolve_graph_database(project_id: Optional[str] = None) -> Optional[str]:
                 return project_id
 
     return None
+
+
+def _bridge_db_candidates(database: Optional[str]) -> List[str]:
+    """Database list for bridge-query diagnostics: explicit or every graph."""
+    if database:
+        return [database]
+    try:
+        return list(cplus_backend._resolve_db_candidates(None))
+    except Exception:  # noqa: BLE001 - diagnostics must never fail the query
+        return []
+
+
+async def _repo_scope_empty_warnings(
+    repo_value: Optional[str],
+    applied: bool,
+    has_results: bool,
+    db_candidates: List[str],
+) -> List[str]:
+    """Scoped-empty hint (RR2 follow-up) via the cplus backend's runner."""
+    if not db_candidates:
+        return [f"repo '{repo_value}' matched 0 nodes"] if applied and repo_value else []
+    return await _repo_scope_empty_warnings_impl(
+        cplus_backend._run_cypher_first,
+        repo_value,
+        applied,
+        has_results,
+        db_candidates,
+    )
 
 
 async def _run_bridge_query(
@@ -2412,6 +2517,7 @@ async def tool_find_callers_of_endpoint(
     be_project_id: str = "",
     fe_project_id: str = "",
     project_id:    str = "",
+    repo:          Optional[str] = None,
     parser_type:   str = "",
 ) -> Dict[str, Any]:
     """
@@ -2462,7 +2568,8 @@ async def tool_find_callers_of_endpoint(
     if capability_error:
         return capability_error
     method_filter = (http_method.strip().upper() or "")
-    params: Dict[str, Any] = {"path": endpoint_path}
+    repo_value, repo_applied = _repo_scope_state(repo)
+    params: Dict[str, Any] = {"path": endpoint_path, "repo": repo}
     ep_props = ["path: $path"]
     if be_project_id:
         ep_props.append("project_id_normalized: $be_project_normalized")
@@ -2495,6 +2602,9 @@ async def tool_find_callers_of_endpoint(
             f"WITH ep WHERE {servlet_active_generation_predicate('ep')}",
             api_call_match,
             "MATCH (f:Function)-[:CALLS_API]->(ac)",
+            # RR2 anchor rule: the callers are the returned results; the
+            # endpoint/ApiCall bridge nodes stay unfiltered.
+            f"WHERE {repo_scope_predicate('f')}",
             "RETURN f.name          AS function_name,",
             "       f.qualified_name AS qualified_name,",
             "       f.react_role    AS react_role,",
@@ -2508,11 +2618,20 @@ async def tool_find_callers_of_endpoint(
         ]
     )
     try:
-        callers = await _run_bridge_query(cypher, params, database)
+        callers = await _run_bridge_query(
+            cypher,
+            prepare_repo_scope_parameters(params),
+            database,
+        )
         result = {"endpoint_path": endpoint_path, "callers": callers, "total": len(callers)}
     except Exception as exc:
         result = {"endpoint_path": endpoint_path, "callers": [], "total": 0, "error": str(exc)}
     result["capability"] = routing
+    repo_warnings = await _repo_scope_empty_warnings(
+        repo_value, repo_applied, bool(result.get("callers")), _bridge_db_candidates(database)
+    )
+    result["scope"] = _repo_scope_block(repo_value, repo_applied, repo_warnings)
+    result["warnings"] = repo_warnings
     if capability_diagnostics:
         result["capability_diagnostics"] = capability_diagnostics
     return result
@@ -2533,6 +2652,7 @@ async def tool_get_api_call_chain(
     fe_project_id:  str = "",
     be_project_id:  str = "",
     project_id:     str = "",
+    repo:           Optional[str] = None,
     max_depth:      int = 5,
     parser_type:    str = "",
 ) -> Dict[str, Any]:
@@ -2572,6 +2692,7 @@ async def tool_get_api_call_chain(
 
     if not component_name and not endpoint_path:
         return {"chains": [], "total": 0, "error": "component_name or endpoint_path required"}
+    repo_value, repo_applied = _repo_scope_state(repo)
 
     selected_parser, relationships, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
@@ -2638,7 +2759,7 @@ LIMIT 30
     if component_name:
         # Traverse from FE component → ApiCall → ApiEndpoint → Controller → Service → Repo → DB
         fe_props = ["name: $component_name"]
-        params = {"component_name": component_name}
+        params = {"component_name": component_name, "repo": repo}
         if fe_project_id:
             fe_props.append("project_id_normalized: $fe_project_normalized")
             params["fe_project"] = fe_project_id
@@ -2654,6 +2775,10 @@ LIMIT 30
         cypher = "\n".join(
             [
                 f"MATCH (fe:Function {_format_props(fe_props)})",
+                # RR2 anchor rule: the addressed FE component is the anchor
+                # (`repo` below is the Repository node variable — `$repo` is
+                # a parameter and never collides with it).
+                f"WHERE {repo_scope_predicate('fe')}",
                 f"MATCH (fe)-[:{flow_relationships}*0..{_depth}]->(caller:Function)",
                 endpoint_match,
                 f"WITH fe, caller, ac, m, ep WHERE {servlet_active_generation_predicate('ep')}",
@@ -2673,7 +2798,7 @@ LIMIT 30
     else:
         # Start from endpoint, traverse both ways
         ep_props = ["path: $endpoint_path"]
-        params = {"endpoint_path": endpoint_path}
+        params = {"endpoint_path": endpoint_path, "repo": repo}
         if be_project_id:
             ep_props.append("project_id_normalized: $be_project_normalized")
             params["be_project"] = be_project_id
@@ -2689,6 +2814,7 @@ LIMIT 30
                 f"WITH ep WHERE {servlet_active_generation_predicate('ep')}",
                 api_call_match,
                 "MATCH (caller:Function)-[:CALLS_API]->(ac)",
+                f"WHERE {repo_scope_predicate('caller')}",
                 "WITH caller, ac, m, ep",
                 "OPTIONAL MATCH (ep)-[:HANDLES]->(forwardCtrl:Controller)",
                 "OPTIONAL MATCH (reverseCtrl:Controller)-[:HANDLES]->(ep)",
@@ -2705,7 +2831,11 @@ LIMIT 30
         )
 
     try:
-        rows = await _run_bridge_query(cypher, params, database)
+        rows = await _run_bridge_query(
+            cypher,
+            prepare_repo_scope_parameters(params),
+            database,
+        )
         chains = [
             {
                 "fe_component":    r.get("fe_component"),
@@ -2734,6 +2864,11 @@ LIMIT 30
     except Exception as exc:
         result = {"chains": [], "total": 0, "error": str(exc)}
     result["capability"] = routing
+    repo_warnings = await _repo_scope_empty_warnings(
+        repo_value, repo_applied, bool(result.get("chains")), _bridge_db_candidates(database)
+    )
+    result["scope"] = _repo_scope_block(repo_value, repo_applied, repo_warnings)
+    result["warnings"] = repo_warnings
     if capability_diagnostics:
         result["capability_diagnostics"] = capability_diagnostics
     return result
