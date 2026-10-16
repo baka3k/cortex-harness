@@ -2,6 +2,9 @@
 
 Implementation and maintenance records, newest first:
 
+- [Optional repo scope param for code-side MCP query tools](2026-10-16-repo-scope-mcp-query-tools.md)
+- [MCP single-channel JSON envelope v2.0](2026-10-13-mcp-single-channel-envelope-v2.md)
+- [Hybrid BGE-M3 + RRF retrieval](2026-10-11-hybrid-bge-m3-rrf.md)
 - [project_id scope mechanism for mind_mcp](2026-10-12-project-id-scope-mechanism.md)
 - [VB6 worker per-file parse progress + two-stage SLL→LL](2026-10-02-vb6-worker-progress-sll.md)
 - [YAKE dynamic entity rules for doc sync](2026-09-24-yake-dynamic-rules-doc-sync.md)
