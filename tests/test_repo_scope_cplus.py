@@ -239,6 +239,50 @@ _REPO_EXCLUDED_TOOLS = {
 }
 
 
+class CPlusPayloadDispatchRegressionTest(unittest.IsolatedAsyncioTestCase):
+    """The unified dispatcher calls backend tools as ``fn(payload=merged)`` —
+    the typed ``repo`` kwarg is NEVER bound on that path. Regression guard
+    for the bug found by the real-server matrix (2026-10-16): the params
+    dict must carry the repo value from the PAYLOAD, not from the kwarg,
+    or the filter silently no-ops while scope.filter_applied claims True.
+
+    ``trace_flow``/``listup_*`` are called the same way the dispatcher does
+    — payload only, no keyword arguments.
+    """
+
+    def setUp(self) -> None:
+        self.h = _Harness()
+        for target, replacement in (
+            ("_run_cypher", self.h.run_cypher),
+            ("_list_databases", self.h.list_databases),
+        ):
+            patcher = unittest.mock.patch.object(cplus_mcp, target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_trace_flow_repo_rides_payload_only(self) -> None:
+        await cplus_mcp.tool_trace_flow(start_id="a", end_id="b", payload={"repo": "s3"})
+        query, params = self.h.main_call
+        self.assertEqual(params["repo"], "s3")
+        self.assertEqual(params["repo_suffix"], "/s3")
+        self.assertIn("a.repo = $repo", query)
+        self.assertIn("b.repo = $repo", query)
+
+    async def test_listup_class_repo_rides_payload_only(self) -> None:
+        await cplus_mcp.tool_listup_class_matching_path(
+            class_names=["X"], payload={"repo": "s3"}
+        )
+        query, params = self.h.main_call
+        self.assertEqual(params["repo"], "s3")
+        self.assertIn("c.repo = $repo", query)
+
+    async def test_search_functions_repo_rides_payload_only(self) -> None:
+        await cplus_mcp.tool_search_functions(query="pay", payload={"repo": "s3"})
+        for query, params in self.h.main_calls:
+            self.assertEqual(params["repo"], "s3")
+            self.assertIn("$repo = ''", query)
+
+
 class CPlusTemplateChecklistTest(unittest.TestCase):
     def setUp(self) -> None:
         self.source = Path(cplus_mcp.__file__).read_text()

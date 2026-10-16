@@ -2854,7 +2854,7 @@ async def tool_listup_symbols_matching_file_path(
         f"AND {repo_scope_predicate('n')} "
         "RETURN n"
     )
-    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id, "repo": repo}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id, "repo": repo_value}, db_candidates)
     repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
@@ -2918,7 +2918,7 @@ async def tool_listup_class_matching_path(
         "WHERE ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN c, f"
     )
-    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id, "repo": repo}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id, "repo": repo_value}, db_candidates)
     repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
     mode = _normalize_content_mode(content_mode)
     classes_seen: Dict[str, Dict[str, Any]] = {}
@@ -3017,7 +3017,7 @@ async def tool_list_up_entrypoint(
             "module_segments": module_segments,
             "limit": int(limit),
             "project_id": project_id,
-            "repo": repo,
+            "repo": repo_value,
         },
         db_candidates,
     )
@@ -3132,7 +3132,7 @@ async def tool_trace_flow(
         )
         used_db, result = await _run_cypher_first(
             query,
-            {"start": start_id, "end": end_id, "project_id": project_id, "repo": repo, "limit": int(limit)},
+            {"start": start_id, "end": end_id, "project_id": project_id, "repo": repo_value, "limit": int(limit)},
             candidates,
         )
         if not result:
@@ -3162,7 +3162,7 @@ async def tool_trace_flow(
         )
         used_db, result = await _run_cypher_first(
             query,
-            {"start": start_id, "limit": limit, "project_id": project_id, "repo": repo},
+            {"start": start_id, "limit": limit, "project_id": project_id, "repo": repo_value},
             candidates,
         )
         if not result:
@@ -3305,7 +3305,7 @@ async def tool_trace_flow_between_module(
     )
     used_db, results = await _run_cypher_first(
         query,
-        {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo},
+        {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo_value},
         db_candidates,
     )
     if not results and direction not in {"both", "any", "undirected"}:
@@ -3332,7 +3332,7 @@ async def tool_trace_flow_between_module(
         )
         used_db, results = await _run_cypher_first(
             fallback_query,
-            {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo},
+            {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id, "repo": repo_value},
             db_candidates,
         )
     paths = [row["p"] for row in results]
@@ -3461,13 +3461,13 @@ async def tool_search_functions(
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo, "framework": framework, "kinds": kinds},
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo_value, "framework": framework, "kinds": kinds},
             db_candidates,
         )
         if framework or not results:
             fallback_db, fallback_results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo, "framework": framework, "kinds": kinds},
+                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo_value, "framework": framework, "kinds": kinds},
                 db_candidates,
             )
             used_db = used_db or fallback_db
@@ -3482,7 +3482,7 @@ async def tool_search_functions(
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo, "framework": framework, "kinds": kinds},
+            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo_value, "framework": framework, "kinds": kinds},
             db_candidates,
         )
     repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)
@@ -3562,19 +3562,19 @@ async def tool_search_by_code(
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo},
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "repo": repo_value},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
+                {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo_value},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo},
+            {"qs": qs, "limit": int(limit), "project_id": project_id, "repo": repo_value},
             db_candidates,
         )
     repo_warnings = await _repo_scope_empty_warnings(repo_value, repo_applied, bool(results), db_candidates)

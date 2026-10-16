@@ -58,6 +58,16 @@ tool đi qua driver method), `filter_vector_hits_by_repo` +
 Chuỗi params: `prepare_repo_scope_parameters(prepare_project_scope_parameters(...))`
 — đã cài sẵn trong `_run_cypher_first` của cả 4 backend.
 
+**⚠ R7 — REPO PHẢI ĐỌC TỪ PAYLOAD, KHÔNG PHẢI KWARG (cplus/android).**
+Unified dispatch gọi backend `fn(payload=merged)` — kwargs typed KHÔNG được
+bind trên đường đó. Params Cypher trong tool kiểu payload-merge PHẢI dùng
+`"repo": repo_value` (biến đã derive từ `payload.get("repo")`), **cấm**
+`"repo": repo` (kwarg — luôn None → filter âm thầm no-op trong khi scope
+block vẫn báo `filter_applied: true`). Regression:
+`tests/test_repo_scope_cplus.py::CPlusPayloadDispatchRegressionTest`
+(gọi tool đúng kiểu dispatch — payload-only). FastMCP standalone và planner
+dispatch (`fn(**arguments)`) bind kwarg bình thường.
+
 ## 4. Bảng anchor semantics (đối chiếu trước khi thêm/sửa query)
 
 | Nhóm query | Alias đặt predicate | Lý do |
