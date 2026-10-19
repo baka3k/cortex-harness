@@ -449,7 +449,7 @@ public final class Vb6Worker {
 	 * whose params charset stays strict UTF-8.
 	 */
 	private static final Charset[] LEGACY_FALLBACKS = {
-			charsetOrNull("windows-31j"), // CP932 / Shift-JIS + [redacted]/IBM extensions
+			charsetOrNull("windows-31j"), // CP932 / Shift-JIS + vendor extensions
 			charsetOrNull("windows-1252"),
 			StandardCharsets.ISO_8859_1,
 	};
