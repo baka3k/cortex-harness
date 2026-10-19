@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [link-tiny doc↔code traceability: exact-name links + link_mcp :8790](2026-10-19-link-tiny-doc-code-traceability.md)
 - [Optional repo scope param for code-side MCP query tools](2026-10-16-repo-scope-mcp-query-tools.md)
 - [MCP single-channel JSON envelope v2.0](2026-10-13-mcp-single-channel-envelope-v2.md)
 - [Hybrid BGE-M3 + RRF retrieval](2026-10-11-hybrid-bge-m3-rrf.md)
