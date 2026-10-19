@@ -132,3 +132,4 @@ doc-tiny/rules/from-yake/
 
 # sensitive terms blocklist — LOCAL ONLY (it names the terms it blocks)
 .sensitive-terms
+code-tiny/tools/vb/antlr_worker/worker/target/vb6-antlr-worker.jar
