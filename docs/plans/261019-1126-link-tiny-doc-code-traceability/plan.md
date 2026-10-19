@@ -7,6 +7,7 @@ scope: "new link-tiny/ tree (registry facade, normalizers, link engine, link sto
 blockedBy: []
 blocks: []
 relatedPlans:
+  - 261019-1700-link-record-sha-join (follow-up: repairs this plan's Phase-3 delta/SHA step — record source_sha joins missed both baseline namespaces)
   - 260728-0000-unified-ingest-query-contract (naming contract + ProjectRegistry — link-tiny reuses resolve_project_targets as the only join key)
   - 260828-1508-multi-instance-fanout-default (lease semantics — link engine opens both graphs read-only, no writer lease)
   - 261013-0000-mcp-single-channel-json-contract (envelope v2 — link_mcp emits the same tool-result envelope)
