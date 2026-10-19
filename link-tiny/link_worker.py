@@ -158,6 +158,9 @@ def build_project(
     code_shas = link_engine.load_code_inventory_hashes(
         code_folders, targets.project_id, project_dir
     )
+    code_folder_shas = link_engine.load_code_folder_inventories(
+        code_folders, targets.project_id
+    )
     if not code_shas:
         code_shas = fallback_code_shas
 
@@ -179,6 +182,7 @@ def build_project(
             parser_type=targets.parser_type,
             reconcile=reconcile,
             dry_run=dry_run,
+            code_folder_shas=code_folder_shas,
         )
     finally:
         code_graph.close()
@@ -194,6 +198,9 @@ def build_project(
         "unchanged_links": report.unchanged_links,
         "doc_universe": report.doc_universe,
         "symbol_universe": report.symbol_universe,
+        "symbol_universe_expected": report.symbol_universe_expected,
+        "symbol_universe_by_label": report.symbol_universe_by_label,
+        "sha_join": report.sha_join,
         "links_dir": str(links_dir),
         "coverage": report.coverage,
         "would_link": (

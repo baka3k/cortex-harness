@@ -491,6 +491,9 @@ def trace_status_impl(project_id: Optional[str] = None) -> Dict[str, Any]:
         "built_at": state.get("built_at"),
         "counts": state.get("counts"),
         "coverage": state.get("coverage"),
+        "sha_join": state.get("sha_join"),
+        "symbol_universe_by_label": state.get("symbol_universe_by_label"),
+        "symbol_universe_expected": state.get("symbol_universe_expected"),
         "stale_links": sum(
             1
             for record in model["links"]

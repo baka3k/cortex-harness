@@ -30,9 +30,16 @@ dev sync link stop               # stop a running link worker
 
 Only exact name matches link (`login_handler` = `loginHandler`, score
 1.0, provenance `exact-name`); a name appearing in N files yields N links
-— nothing is auto-selected. Records live in
+— nothing is auto-selected. Symbol labels cover functions, types,
+properties, variables **and designer `Field` controls**; label reads are
+paginated, so the graph server's `resultset_size` never silently drops
+symbols (`state.json["symbol_universe_by_label"]` accounts every label —
+a round-10000 label there is the regression signature of a broken read).
+Records live in
 `{instance}/links/{project_id}/links.jsonl` (append-only) with a
-`state.json` snapshot carrying counts + coverage telemetry.
+`state.json` snapshot carrying counts + coverage + sha-join telemetry
+(`sha_join`: per-record doc/code SHA match, missing and ambiguous
+counters).
 
 ### 3. Query via link_mcp (:8790)
 
@@ -59,6 +66,14 @@ last `dev sync link`, tools annotate results with
 `trace data stale — run 'dev sync link'` (`trace_status` reports
 `stale: true`); superseded links are appended as `status: "stale"`, never
 deleted.
+
+**Content edits are detected.** Records carry the doc/code `source_sha`
+joined from the sync baselines at build time (doc ids resolve through the
+`__`-flattened spelling dev.py writes into the graph; code paths join via
+the graph's `repo` + folder-relative path — see `LINK_CONTRACT.md`
+§1.5). When a file's SHA changes in the baseline, its links go stale and
+fresh copies are re-appended on the next run — deletions *and* edits
+stale-propagate.
 
 ## Components
 

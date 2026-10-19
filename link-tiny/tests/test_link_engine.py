@@ -366,6 +366,25 @@ def test_coverage_fixture(tmp_path):
     }
 
 
+def test_sha_join_telemetry(tmp_path):
+    """Per-record sha-join counters reach the report AND state.json."""
+    links_dir = tmp_path / "fixt"
+    report = _build(links_dir)
+    # session_store's file is absent from the flat baseline → code_missing
+    assert report.sha_join == {
+        "doc_matched": 2,
+        "doc_missing": 0,
+        "code_matched": 1,
+        "code_missing": 1,
+        "code_ambiguous": 0,
+    }
+    state = store.load_state(links_dir)
+    assert state["sha_join"] == report.sha_join
+    # state.json sha snapshot keys stay unchanged (flat doc+code maps)
+    assert set(state["doc_shas"]) == {"docs/auth.md"}
+    assert set(state["code_shas"]) == {"src/auth/login.py"}
+
+
 # ---------------------------------------------------------------------------
 # Delta sources: sync-state merge + inventory loading
 # ---------------------------------------------------------------------------
@@ -447,3 +466,327 @@ def test_doc_sha_spelling_fallback(tmp_path):
     _build(links_dir, code=code, doc=doc, doc_shas={"docs/auth.md": "a" * 8})
     records = store.load_links(links_dir, status="active")
     assert records[0]["doc"]["source_sha"] == "a" * 8
+
+
+# ---------------------------------------------------------------------------
+# Full symbol universe: pagination + Field label (plan 261019-1700 Phase 03)
+# ---------------------------------------------------------------------------
+
+
+import re as _re
+
+
+def _int_after(query: str, keyword: str) -> int:
+    match = _re.search(rf"{keyword} (\d+)", query)
+    return int(match.group(1)) if match else 0
+
+
+class PagedStubGraph:
+    """Fake graph with per-label stores, count() and a resultset cap.
+
+    ``cap`` simulates the server's ``resultset_size`` (FalkorDB default
+    10000): every ``run()`` response is truncated to at most ``cap`` rows,
+    exactly how the live incident lost symbols beyond the cut.
+    ``cut_after`` models a server that serves nothing beyond that SKIP
+    offset (the shortfall case — a loud warning must fire).
+    ``fail_labels`` makes page queries raise for those labels (unreadable
+    label → per-label degradation that must stay visible in accounting).
+    """
+
+    def __init__(
+        self,
+        labels=None,
+        paragraphs=None,
+        entity_mentions=None,
+        cap=None,
+        cut_after=None,
+        count_override=None,
+        fail_labels=None,
+    ):
+        self.labels = labels or {}
+        self.paragraphs = paragraphs or []
+        self.entity_mentions = entity_mentions or []
+        self.cap = cap
+        self.cut_after = cut_after
+        self.count_override = count_override or {}
+        self.fail_labels = fail_labels or set()
+
+    @staticmethod
+    def _label_of(query):
+        match = _re.search(r"MATCH \(n:(\w+)\)", query)
+        return match.group(1) if match else None
+
+    def _page(self, rows, query):
+        rows = list(rows)
+        skip = _int_after(query, "SKIP")
+        limit = _int_after(query, "LIMIT") or len(rows)
+        page = rows[skip:skip + limit]
+        if self.cut_after is not None and skip >= self.cut_after:
+            page = []
+        if self.cap is not None:
+            page = page[:self.cap]
+        return [dict(row) for row in page]
+
+    def run(self, query, params=None):
+        if "count(" in query:
+            if "HAS_ENTITY" in query:
+                return [{"c": len(self.entity_mentions)}]
+            if "Paragraph" in query:
+                return [{"c": len(self.paragraphs)}]
+            label = self._label_of(query)
+            if label in self.count_override:
+                return [{"c": self.count_override[label]}]
+            return [{"c": len(self.labels.get(label, []))}]
+        if self._label_of(query) in self.fail_labels:
+            raise RuntimeError(f"label store broken: {self._label_of(query)}")
+        if "HAS_ENTITY" in query:
+            return self._page(self.entity_mentions, query)
+        if "Paragraph" in query:
+            return self._page(self.paragraphs, query)
+        return self._page(self.labels.get(self._label_of(query), []), query)
+
+
+def _function_rows(count, name_prefix="fn"):
+    return [
+        _symbol_row(f"{name_prefix}_{i:02d}", f"src/mod{i % 3}/file{i}.py")
+        for i in range(count)
+    ]
+
+
+def test_pagination_indexes_every_row_under_resultset_cap(tmp_path):
+    """>cap rows per label all reach the match index (cap-proof reads)."""
+    code = PagedStubGraph(
+        labels={
+            "Function": _function_rows(11),
+            "Variable": [_symbol_row("v1", "src/v.py"), _symbol_row("v2", "src/v.py")],
+        },
+        cap=4,  # server caps every response at 4 rows
+    )
+    symbols, by_label = engine.read_code_symbols_report(code, "fixt", "python", batch=3)
+    assert len({s.identity for s in symbols}) == 13
+    assert by_label["Function"] == {"rows_read": 11, "expected": 11, "kept": 11}
+    assert by_label["Variable"]["rows_read"] == 2
+
+
+def test_pagination_no_duplicates_across_batch_boundaries(tmp_path):
+    code = PagedStubGraph(labels={"Function": _function_rows(9)}, cap=5)
+    symbols, by_label = engine.read_code_symbols_report(code, "fixt", "python", batch=4)
+    identities = [s.identity for s in symbols]
+    assert len(identities) == len(set(identities)) == 9
+    assert by_label["Function"]["rows_read"] == by_label["Function"]["expected"] == 9
+
+
+def test_shortfall_is_loud_never_silent(tmp_path, capsys):
+    """A server that stops serving rows short of its own count warns loudly."""
+    code = PagedStubGraph(
+        labels={"Function": _function_rows(4)},
+        cut_after=4,
+        count_override={"Function": 10},  # server claims 10, serves 4
+    )
+    symbols, by_label = engine.read_code_symbols_report(code, "fixt", "python", batch=3)
+    assert len(symbols) == 4
+    assert by_label["Function"]["rows_read"] < by_label["Function"]["expected"]
+    assert "truncated" in capsys.readouterr().err
+
+
+def test_field_label_linked(tmp_path):
+    """Designer `Field` symbols link like Variables (incident regression)."""
+    links_dir = tmp_path / "fixt"
+    doc = StubGraph(
+        paragraphs=[
+            _paragraph(
+                "specs__order_summary_spec.md",
+                21,
+                "grid_unit_col controls the unit column.",
+            )
+        ]
+    )
+    code = PagedStubGraph(
+        labels={
+            "Variable": [
+                _symbol_row(
+                    "grid_unit_col",
+                    "src/orders/OrderSummaryForm.Designer.vb",
+                    start=None,
+                    end=None,
+                )
+            ],
+            "Field": [
+                _symbol_row(
+                    "grid_unit_col",
+                    "src/orders/OrderSummaryForm.Designer.cs",
+                    start=4443,
+                    end=4443,
+                )
+            ],
+        },
+    )
+    _build(links_dir, code=code, doc=doc, doc_shas={}, code_shas={})
+    records = store.load_links(links_dir, status="active")
+    paths = {r["code"]["path"] for r in records}
+    assert paths == {
+        "src/orders/OrderSummaryForm.Designer.vb",
+        "src/orders/OrderSummaryForm.Designer.cs",
+    }
+    assert all(r["code"]["target_type"] == "symbol" for r in records)
+
+
+def test_symbol_universe_equals_sum_of_server_counts(tmp_path):
+    """Universe accounting: report total == Σ per-label server counts."""
+    links_dir = tmp_path / "fixt"
+    doc = StubGraph(paragraphs=[])
+    code = PagedStubGraph(
+        labels={
+            "Function": _function_rows(3),
+            "Variable": [_symbol_row("v1", "src/v.py"), _symbol_row("v2", "src/v2.py")],
+            "Field": [_symbol_row("f1", "src/f.Designer.cs")],
+        },
+        cap=2,  # even under a cap, accounting must reconcile
+    )
+    report = _build(links_dir, code=code, doc=doc)
+    expected_sum = sum(
+        stats["expected"] for stats in report.symbol_universe_by_label.values()
+    )
+    assert report.symbol_universe == expected_sum == 6  # Σ kept on clean reads
+    assert report.symbol_universe_expected == 6  # Σ server counts (gate)
+    state = store.load_state(links_dir)
+    assert state["symbol_universe_by_label"]["Field"] == {
+        "rows_read": 1, "expected": 1, "kept": 1,
+    }
+    assert state["symbol_universe_expected"] == 6
+
+
+def test_symbol_beyond_cap_regression(tmp_path):
+    """The live incident: a symbol past the unpaginated cut still links."""
+    links_dir = tmp_path / "fixt"
+    doc = StubGraph(
+        paragraphs=[
+            _paragraph("specs__order_summary_spec.md", 21, "grid_unit_col is the unit.")
+        ]
+    )
+    # grid_unit_col sits behind 5 other rows; the server caps at 2
+    code = PagedStubGraph(
+        labels={
+            "Variable": _function_rows(5, "filler")
+            + [
+                _symbol_row(
+                    "grid_unit_col",
+                    "src/orders/OrderSummaryForm.Designer.vb",
+                    start=None,
+                    end=None,
+                )
+            ],
+        },
+        cap=2,
+    )
+    _build(links_dir, code=code, doc=doc, doc_shas={}, code_shas={})
+    records = store.load_links(links_dir, status="active")
+    assert [r["code"]["name"] for r in records] == ["grid_unit_col"]
+
+
+# ---------------------------------------------------------------------------
+# Review findings (261019-1700 fix cycle 1): join determinism, guard rails
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_identity_joins_one_way_no_oscillation(tmp_path):
+    """Same identity stamped in two repos resolves ONE way, forever.
+
+    The write path (match index) and the drift path must share one join
+    result per identity — otherwise identical builds oscillate and grow
+    the append-only log on every run (review finding 1).
+    """
+    links_dir = tmp_path / "fixt"
+    doc = StubGraph(
+        paragraphs=[_paragraph("docs/auth.md", 1, "the dup_handler works.")]
+    )
+    row = _symbol_row("dup_handler", "src/shared/_same.vb", start=1, end=2)
+    code = PagedStubGraph(labels={"Function": [dict(row, repo="/proj/s1"),
+                                               dict(row, repo="/proj/s3")]})
+    folder_shas = {
+        engine.normalize_repo_key("/proj/s1"): {"src/shared/_same.vb": "1" * 8},
+        engine.normalize_repo_key("/proj/s3"): {"src/shared/_same.vb": "4" * 8},
+    }
+    _build(links_dir, code=code, doc=doc,
+           doc_shas={"docs/auth.md": "a" * 8}, code_shas={},
+           code_folder_shas=folder_shas)
+    # 2nd and 3rd identical builds are strict no-ops
+    for _ in range(2):
+        report = _build(links_dir, code=code, doc=doc,
+                        doc_shas={"docs/auth.md": "a" * 8}, code_shas={},
+                        code_folder_shas=folder_shas)
+        assert report.new_links == []
+        assert report.unchanged_links == 1
+    active = store.latest_links(links_dir, status="active")
+    assert len(active) == 1
+    assert store.latest_links(links_dir, status="stale") == []
+    # the winning SHA is the first symbol's repo (s1), stably
+    assert active[0]["code"]["source_sha"] == "1" * 8
+
+
+def test_known_repo_miss_never_borrows():
+    """A repo pinning a known folder is authoritative (review finding 2)."""
+    folders = {
+        engine.normalize_repo_key("/proj/s1"): {"src/only_s1.py": "1" * 8},
+        engine.normalize_repo_key("/proj/s3"): {"src/only_s3.py": "4" * 8},
+    }
+    index = engine.CodeShaIndex(folders, {})
+    # s1's pin + a path only s3 has → missing, NOT s3's SHA
+    assert index.resolve("/proj/s1", "src/only_s3.py") == (None, "missing")
+    assert index.resolve("/proj/s3", "src/only_s3.py") == ("4" * 8, "matched")
+
+
+def test_destructive_read_guard(tmp_path):
+    """A collapsed symbol read must not stale-mark a non-empty link set."""
+    links_dir = tmp_path / "fixt"
+    _build(links_dir)  # 2 active records
+    empty = StubGraph(paragraphs=[], symbols=[])
+    with pytest.raises(engine.LinkEngineError, match="collapsed"):
+        _build(links_dir, code=empty, doc=empty)
+    # existing actives untouched by the aborted build
+    assert len(store.latest_links(links_dir, status="active")) == 2
+    assert store.latest_links(links_dir, status="stale") == []
+    # reconcile states operator intent and bypasses the guard
+    report = _build(links_dir, code=empty, doc=empty, reconcile=True)
+    assert len(report.staled_links) == 2
+
+
+def test_doc_wipe_still_stales_when_symbols_present(tmp_path):
+    """A genuine doc-side wipe stales — the guard is code-reads only."""
+    links_dir = tmp_path / "fixt"
+    _build(links_dir)
+    doc = StubGraph(paragraphs=[])  # docs wiped, code graph intact
+    _build(links_dir, doc=doc)
+    stale = store.latest_links(links_dir, status="stale")
+    assert {r["code"]["name"] for r in stale} == {"login_handler", "session_store"}
+
+
+def test_unreadable_label_stays_in_accounting(tmp_path, capsys):
+    """A dead label degrades but never vanishes from the universe (F3)."""
+    code = PagedStubGraph(
+        labels={"Function": _function_rows(2)},
+        fail_labels={"Field"},
+    )
+    symbols, by_label = engine.read_code_symbols_report(code, "fixt", "python")
+    assert len(symbols) == 2
+    assert by_label["Field"] == {"rows_read": 0, "expected": 0, "kept": 0, "error": 1}
+    assert "unreadable" in capsys.readouterr().err
+
+
+def test_doc_reads_are_paginated_too(tmp_path):
+    """Paragraph + entity reads survive a server cap (review finding 4)."""
+    paragraphs = [
+        {"source_id": f"docs/d{i}.md", "paragraph_id": 1, "text": f"handler_{i}"}
+        for i in range(6)
+    ]
+    mentions = [
+        {"source_id": "docs/d0.md", "paragraph_id": 1, "name": "handler_0"},
+        {"source_id": "docs/d0.md", "paragraph_id": 1, "name": "handler_0b"},
+        {"source_id": "docs/d1.md", "paragraph_id": 1, "name": "handler_1"},
+    ]
+    doc = PagedStubGraph(paragraphs=paragraphs, entity_mentions=mentions, cap=2)
+    read = engine.read_doc_paragraphs(doc, "fixt")
+    assert len(read) == 6
+    mentions_map = engine.read_doc_entity_names(doc, "fixt")
+    total = sum(len(v) for v in mentions_map.values())
+    assert total == 3  # every edge row, deduped by (paragraph, entity)

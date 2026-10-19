@@ -124,6 +124,13 @@ def project(tmp_path, monkeypatch):
             "code_shas": {},
             "counts": {"active": 2, "stale": 1, "total": 3},
             "coverage": {"doc_coverage": 1.0},
+            "sha_join": {
+                "doc_matched": 2,
+                "doc_missing": 0,
+                "code_matched": 2,
+                "code_missing": 0,
+                "code_ambiguous": 0,
+            },
         },
     )
     return {"links_dir": links_dir, "instance": instance, "tmp": tmp_path}
@@ -156,6 +163,13 @@ def test_envelope_v2(tools, project):
     assert envelope["tool"] == "trace_status"
     assert envelope["ok"] is True
     assert result.isError is False
+
+
+def test_trace_status_reports_sha_join(tools, project):
+    """state.json['sha_join'] passes through to trace_status (plan telemetry)."""
+    status = _envelope(tools["trace_status"](project_id="fixt"))["data"]
+    assert status["sha_join"]["code_matched"] == 2
+    assert status["sha_join"]["code_ambiguous"] == 0
 
 
 def test_find_code_for_doc(tools, project, monkeypatch):

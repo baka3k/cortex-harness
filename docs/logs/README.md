@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [link-tiny sha-join + full symbol universe (resultset truncation, Field label)](2026-10-19-link-record-sha-join.md)
 - [link-tiny doc↔code traceability: exact-name links + link_mcp :8790](2026-10-19-link-tiny-doc-code-traceability.md)
 - [Optional repo scope param for code-side MCP query tools](2026-10-16-repo-scope-mcp-query-tools.md)
 - [MCP single-channel JSON envelope v2.0](2026-10-13-mcp-single-channel-envelope-v2.md)

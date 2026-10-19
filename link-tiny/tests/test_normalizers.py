@@ -116,6 +116,11 @@ def test_token_match_key(value, expected):
         ("login_handler", True),
         ("UserAuthService", True),
         ("parse", False),  # stoplist even though length >= 4
+        # designer Field names (Phase 03 noise guard): the label list grew,
+        # but doc tokens still pass the same stoplist/min-length rules —
+        # a doc must literally name the control for a link to appear
+        ("grid_unit_col", True),
+        ("textBox2", True),  # identifier-shaped; only links when named in a doc
     ],
 )
 def test_is_linkable_token(token, linkable):

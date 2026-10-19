@@ -82,6 +82,117 @@ re-appends the authoritative set.
 materially sparse *and* noisy-free. The go/no-go decision reads this file,
 not intuition.
 
+### 1.5 SHA join (how records get their `source_sha`)
+
+Record SHAs never come from the graphs — they are joined from the sync
+baselines at build time. The two sides spell paths differently, and the
+join contract below is the only sanctioned mapping. Evidence in this
+section is measured on the live deployment (probe:
+`link-tiny/tests/probe_sha_namespaces.py`, 2026-10-19).
+
+**Doc side.** The doc graph's `Paragraph.source_id` is dev.py's
+`_safe_source_id` spelling: the POSIX rel path with **both separators
+replaced by `__`** (`a/b.md` → `a__b.md`; single-file mode uses the bare
+stem). The sync-state baseline holds POSIX rel paths. Lookup order for a
+`doc_id`, resolved against an index built once per build:
+
+1. direct: baseline key == the `doc_id` (POSIX-normalized);
+2. flattened: `flatten_doc_rel(key) == doc_id` (probe hit-rate on the live project:
+   67/67 source_ids);
+3. stem: unique baseline file whose stem equals the `doc_id`
+   (single-file mode). An ambiguous flattened id or stem — several
+   baseline keys collapsing to one id with *different* SHAs — resolves
+   to **nothing**; a wrong document's SHA must never be guessed.
+
+`doc_id` is **never un-flattened**: file names may legitimately contain
+`__`, so the flattened index is built from baseline keys, not by
+splitting ids.
+
+**Code side.** Graph symbols carry `file_path`/`source_file` as
+**folder-relative** paths plus a `repo` property; vb/csharp parsers stamp
+`repo` with the absolute scan-folder path (probe: every symbol label on
+the live project). Framework endpoint labels (`HttpEndpoint`, `Route`, …) carry
+`repo = null`. Inventories hold **folder-relative** keys per scan folder.
+The join resolves `(repo, path)` against a repo-aware index:
+
+1. **`(repo, path)` exact** — the node's `repo` normalizes to a known
+   scan folder (resolved absolute POSIX, casefolded on lookup only) and
+   that folder's map contains `path` exactly;
+2. **a known-folder `repo` pin is authoritative**: if the pinned
+   folder's map lacks `path`, the result is `missing` — another folder's
+   same-spelled file is a *different file*, never a borrowed SHA (this
+   is the 1-collision/152-shadow data again);
+3. **unique cross-folder fallback** — only when `repo` is null/foreign
+   (endpoint labels; parsers that stamp the project root) and *exactly
+   one* known folder contains `path` as a folder-relative key. With a
+   flat project-relative map, the same rule applies over
+   component-boundary suffixes (a key whose project-relative form ends
+   with `/<path>`);
+4. otherwise `source_sha = null` (`missing`), and when more than one
+   folder matches, `null` with the `ambiguous` outcome.
+
+The join resolves **once per graph identity** and the write and
+drift-detection paths share that result — duplicate identities (same
+path/name/lines stamped in two scan folders) must not get different
+SHAs on the two paths, or identical builds would oscillate and grow the
+append-only log forever.
+
+**Naive suffix matching is forbidden.** Live the live s1+s3 scan folders: 1 exact
+folder-relative collision (`src/shared/_shared_widget.vb` exists
+in both scan folders) and 152 cross-folder suffix shadows — a
+"any key that ends with the graph path" rule would assign wrong SHAs
+there. Ambiguity always degrades to `null`, never to a guess.
+
+**Telemetry.** `state.json["sha_join"]` and `BuildReport.sha_join`
+report, counted per fresh record:
+`{doc_matched, doc_missing, code_matched, code_missing, code_ambiguous}`.
+Every `missing`/`ambiguous` counter above zero has a known cause (file
+absent from the inventory, collision between scan folders, unreadable
+baseline); unexplained nulls in records are a bug, not a norm.
+
+### 1.6 Full symbol universe (pagination invariant + label list)
+
+The engine reads every symbol label — and the doc side's `Paragraph` +
+`HAS_ENTITY` reads — with **deterministic keyset pagination**
+(`ORDER BY id(...) SKIP/LIMIT`, batch 5000): a server's `resultset_size`
+(observed FalkorDB default 10000) caps a single query's result set,
+which silently truncated unpaginated reads — on the live project, Function
+(50437), Variable (38619) and Field (27941) each yielded exactly 10000
+rows, so ~78% of symbols never entered the match index. Paged reads stay
+under the cap per query. A doc-side silent cut would be worse than
+under-matching — missing paragraphs would stale their own links — so
+doc reads carry the same invariant.
+
+Invariants (Phase-03 gate):
+
+- **rows read == the server's count per read**; each row enters the
+  index exactly once (internal ids dedup across batch boundaries);
+- a shortfall is a **loud warning** on stderr — never a silent cut. The
+  engine never writes server config (`GRAPH.CONFIG SET` is out of
+  contract);
+- a read that **collapses to zero** against a non-empty prior build
+  aborts the build instead of stale-marking every link (destructive-read
+  guard; `--reconcile` states operator intent and bypasses it);
+- `state.json["symbol_universe_by_label"]` carries
+  `{label: {rows_read, expected, kept}}` per label (an unreadable label
+  stays visible with `error: 1`, it never vanishes);
+  `symbol_universe` (= Σ `kept`) is the matched-index size and
+  `symbol_universe_expected` (= Σ server counts) is the completeness
+  gate — they are equal on clean reads, and any gap is explained per
+  label. A universe showing a round 10000 signature is the regression
+  signature of a broken read.
+
+Symbol labels linked (identity column `file_path`): `Function`, `Class`,
+`Type`, `Interface`, `Enum`, `Constant`, `Variable`, `Property`,
+**`Field`** (designer controls — the artifacts screen/business-rule
+documents actually name). Endpoint labels (identity `source_file`, no
+line numbers): `ApiEndpoint`, `HttpEndpoint`, `Route`,
+`ControllerAction`, `ServletEndpoint`. Designer Field names can be
+generic (`label1`); links still require a doc to name the token exactly
+and the normalizers' stoplist / minimum-length rules apply unchanged —
+no engine-side filtering beyond exact-name (pair growth is measured, not
+guessed).
+
 ## 2. Isolation contract
 
 1. **One-way dependencies.** `link-tiny` imports the code-side registry

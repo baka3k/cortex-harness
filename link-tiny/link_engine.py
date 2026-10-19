@@ -32,6 +32,8 @@ from normalizers import CodeSymbolRef
 
 
 # Symbol labels carrying the core identity columns (name/file_path/lines).
+# ``Field`` covers designer controls — the artifacts screen/business-rule
+# documents actually name (plan 261019-1700 Phase 03).
 CODE_SYMBOL_LABELS = (
     "Function",
     "Class",
@@ -41,6 +43,7 @@ CODE_SYMBOL_LABELS = (
     "Constant",
     "Variable",
     "Property",
+    "Field",
 )
 # Framework-writer labels; identity uses ``source_file`` instead of
 # ``file_path`` and carries no line numbers.
@@ -56,6 +59,10 @@ CODE_ENDPOINT_LABELS = (
 # dependency rule; keep the two lists in step manually).
 DOC_EXTENSIONS = frozenset({".md", ".pdf", ".docx", ".txt", ".pptx", ".xlsx"})
 
+# Keyset page size for label reads — comfortably below any observed
+# resultset_size (FalkorDB default 10000) so pages are never cut.
+SYMBOL_READ_BATCH = 5000
+
 
 class LinkEngineError(RuntimeError):
     """Raised when a link build cannot proceed."""
@@ -68,7 +75,12 @@ class LinkEngineError(RuntimeError):
 
 @dataclass(frozen=True)
 class EngineSymbol:
-    """Code-side identity exactly as stored in link records."""
+    """Code-side identity exactly as stored in link records.
+
+    ``repo`` is a join input only (the scan folder the parser stamped on
+    the node); it is deliberately NOT part of ``identity`` — the record
+    schema and ``record_key`` stay byte-identical.
+    """
 
     name: str
     path: str
@@ -78,6 +90,7 @@ class EngineSymbol:
     language: str = ""
     target_type: str = "symbol"
     parser_type: str = ""
+    repo: str = ""
 
     @property
     def identity(self) -> tuple:
@@ -111,6 +124,16 @@ class ParagraphRef:
         return (self.doc_id, self.paragraph_id)
 
 
+def _empty_sha_join() -> Dict[str, int]:
+    return {
+        "doc_matched": 0,
+        "doc_missing": 0,
+        "code_matched": 0,
+        "code_missing": 0,
+        "code_ambiguous": 0,
+    }
+
+
 @dataclass
 class BuildReport:
     """Outcome of one ``build_links`` run (also the dry-run payload)."""
@@ -124,6 +147,9 @@ class BuildReport:
     dry_run: bool = False
     reconcile: bool = False
     coverage: Dict[str, Any] = field(default_factory=dict)
+    sha_join: Dict[str, int] = field(default_factory=_empty_sha_join)
+    symbol_universe_by_label: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    symbol_universe_expected: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -135,15 +161,86 @@ def _run(graph: Any, query: str, **params: Any) -> List[Dict[str, Any]]:
     return list(graph.run(query, params) or [])
 
 
+def _paged_rows(
+    graph: Any,
+    *,
+    match_cypher: str,
+    count_cypher: str,
+    order_by: str,
+    pid: str,
+    batch: int,
+    what: str,
+) -> List[Dict[str, Any]]:
+    """All rows of one match, keyset-paged by ``id()``.
+
+    The server's ``resultset_size`` caps a single query's result set
+    (FalkorDB default 10000, silent) — paging keeps every page under it.
+    Invariant: rows read == the server's count; a shortfall is a loud
+    warning, never a silent cut (a silent doc-side cut would be
+    destructive — missing paragraphs stale their own links).
+    """
+    expected_rows = _run(graph, count_cypher, pid=pid)
+    expected = expected_rows[0].get("c") if expected_rows else None
+    expected = int(expected) if expected is not None else None
+    rows: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    offset = 0
+    while True:
+        page = _run(
+            graph,
+            f"{match_cypher} ORDER BY {order_by} "
+            f"SKIP {int(offset)} LIMIT {int(batch)}",
+            pid=pid,
+        )
+        if not page:
+            break
+        for row in page:
+            # dedup key: every internal id column (a paragraph row has one
+            # node id; an edge row needs the (p, e) pair to stay distinct)
+            node_id = tuple(
+                value for key, value in row.items()
+                if key.startswith("_") and key.endswith("_id")
+            )
+            if node_id:
+                if node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+            rows.append(row)
+        rows_read = len(rows)
+        if expected is not None and rows_read >= expected:
+            break
+        if expected is None and len(page) < batch:
+            break
+        offset += len(page)
+    if expected is not None and len(rows) < expected:
+        print(
+            f"[link-engine] warning: {what} truncated — read {len(rows)} "
+            f"of {expected} rows (server resultset cap?); links for the "
+            "missing rows would stale-propagate",
+            file=sys.stderr,
+        )
+    return rows
+
+
 def read_doc_paragraphs(doc_graph: Any, project_id_normalized: str) -> List[ParagraphRef]:
     """Read ``Paragraph`` nodes (never ``Chunk`` — that label is vestigial)."""
-    rows = _run(
+    rows = _paged_rows(
         doc_graph,
-        "MATCH (p:Paragraph) "
-        "WHERE p.project_id_normalized = $pid "
-        "RETURN p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
-        "p.text AS text",
+        match_cypher=(
+            "MATCH (p:Paragraph) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN id(p) AS _node_id, p.source_id AS source_id, "
+            "p.paragraph_id AS paragraph_id, p.text AS text"
+        ),
+        count_cypher=(
+            "MATCH (p:Paragraph) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN count(p) AS c"
+        ),
+        order_by="id(p)",
         pid=project_id_normalized,
+        batch=SYMBOL_READ_BATCH,
+        what="Paragraph",
     )
     paragraphs: List[ParagraphRef] = []
     seen: set[tuple] = set()
@@ -164,13 +261,24 @@ def read_doc_entity_names(
     doc_graph: Any, project_id_normalized: str
 ) -> Dict[tuple, List[str]]:
     """Map ``(source_id, paragraph_id)`` → entity names mentioning it."""
-    rows = _run(
+    rows = _paged_rows(
         doc_graph,
-        "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
-        "WHERE p.project_id_normalized = $pid "
-        "RETURN p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
-        "e.name AS name",
+        match_cypher=(
+            "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN id(p) AS _node_id, id(e) AS _entity_id, "
+            "p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
+            "e.name AS name"
+        ),
+        count_cypher=(
+            "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN count(*) AS c"
+        ),
+        order_by="id(p), id(e)",
         pid=project_id_normalized,
+        batch=SYMBOL_READ_BATCH,
+        what="HAS_ENTITY edges",
     )
     mentions: Dict[tuple, List[str]] = {}
     for row in rows:
@@ -184,6 +292,105 @@ def read_doc_entity_names(
     return mentions
 
 
+def _label_server_count(
+    graph: Any, label: str, project_id_normalized: str
+) -> Optional[int]:
+    """Server-side node count for one label (aggregation, not result rows)."""
+    rows = _run(
+        graph,
+        f"MATCH (n:{label}) "
+        "WHERE n.project_id_normalized = $pid "
+        "RETURN count(n) AS c",
+        pid=project_id_normalized,
+    )
+    count = rows[0].get("c") if rows else None
+    return int(count) if count is not None else None
+
+
+def _read_labeled_symbols_paged(
+    graph: Any,
+    label: str,
+    project_id_normalized: str,
+    parser_type: str,
+    target_type: str,
+    batch: int,
+) -> Tuple[List[EngineSymbol], Dict[str, int]]:
+    """Read one label in deterministic keyset batches.
+
+    Invariant (plan 261019-1700 Phase 03): rows read == the server's count
+    for the label, regardless of the server's ``resultset_size`` — the
+    server caps each query's RESULT SET (observed: FalkorDB default
+    10000, silently truncating an unpaginated read), but SKIP/LIMIT pages
+    stay under it. A shortfall vs the count is a loud warning, never a
+    silent cut. ``ORDER BY id(n)`` keeps paging deterministic; ids dedup
+    across batch boundaries.
+    """
+    path_property = "source_file" if target_type == "endpoint" else "file_path"
+    expected = _label_server_count(graph, label, project_id_normalized)
+    symbols: List[EngineSymbol] = []
+    seen_ids: set = set()
+    rows_read = 0
+    offset = 0
+    while True:
+        # SKIP/LIMIT carry engine-controlled ints (no injection surface).
+        # They are inlined — not parameterized — because parameter support
+        # in pagination clauses varies by backend; the query shape is
+        # verified live on FalkorDB. On a backend that rejects it, the
+        # per-label degradation warning plus the destructive-read guard in
+        # build_links surface the failure loudly instead of stale-marking.
+        rows = _run(
+            graph,
+            f"MATCH (n:{label}) "
+            "WHERE n.project_id_normalized = $pid "
+            "RETURN id(n) AS _node_id, n.name AS name, "
+            "n.qualified_name AS qualified_name, "
+            f"n.{path_property} AS file_path, n.start_line AS start_line, "
+            "n.end_line AS end_line, n.language AS language, n.repo AS repo "
+            f"ORDER BY id(n) SKIP {int(offset)} LIMIT {int(batch)}",
+            pid=project_id_normalized,
+        )
+        if not rows:
+            break
+        for row in rows:
+            node_id = row.get("_node_id")
+            if node_id is not None:
+                if node_id in seen_ids:
+                    continue  # overlap across batch boundaries
+                seen_ids.add(node_id)
+            name = str(row.get("name") or "").strip()
+            path = link_store.posix_path(row.get("file_path"))
+            if not name or not path:
+                continue
+            symbols.append(
+                EngineSymbol(
+                    name=name,
+                    path=path,
+                    qualified_name=str(row.get("qualified_name") or ""),
+                    start_line=row.get("start_line"),
+                    end_line=row.get("end_line"),
+                    language=str(row.get("language") or ""),
+                    target_type=target_type,
+                    parser_type=parser_type or "",
+                    repo=str(row.get("repo") or ""),
+                )
+            )
+        rows_read += len(rows)
+        if expected is not None and rows_read >= expected:
+            break
+        if expected is None and len(rows) < batch:
+            break
+        offset += len(rows)
+    stats = {"rows_read": rows_read, "expected": expected or 0, "kept": len(symbols)}
+    if expected is not None and rows_read < expected:
+        print(
+            f"[link-engine] warning: label {label} truncated — read "
+            f"{rows_read} of {expected} rows (server resultset cap?); "
+            "these symbols are MISSING from the match index",
+            file=sys.stderr,
+        )
+    return symbols, stats
+
+
 def _read_labeled_symbols(
     graph: Any,
     label: str,
@@ -191,35 +398,56 @@ def _read_labeled_symbols(
     parser_type: str,
     target_type: str,
 ) -> List[EngineSymbol]:
-    path_property = "source_file" if target_type == "endpoint" else "file_path"
-    rows = _run(
-        graph,
-        f"MATCH (n:{label}) "
-        "WHERE n.project_id_normalized = $pid "
-        "RETURN n.name AS name, n.qualified_name AS qualified_name, "
-        f"n.{path_property} AS file_path, n.start_line AS start_line, "
-        "n.end_line AS end_line, n.language AS language",
-        pid=project_id_normalized,
+    symbols, _stats = _read_labeled_symbols_paged(
+        graph, label, project_id_normalized, parser_type, target_type, SYMBOL_READ_BATCH
     )
-    symbols: List[EngineSymbol] = []
-    for row in rows:
-        name = str(row.get("name") or "").strip()
-        path = link_store.posix_path(row.get("file_path"))
-        if not name or not path:
-            continue
-        symbols.append(
-            EngineSymbol(
-                name=name,
-                path=path,
-                qualified_name=str(row.get("qualified_name") or ""),
-                start_line=row.get("start_line"),
-                end_line=row.get("end_line"),
-                language=str(row.get("language") or ""),
-                target_type=target_type,
-                parser_type=parser_type or "",
-            )
-        )
     return symbols
+
+
+def read_code_symbols_report(
+    code_graph: Any,
+    project_id_normalized: str,
+    parser_type: Optional[str] = None,
+    batch: int = SYMBOL_READ_BATCH,
+) -> Tuple[List[EngineSymbol], Dict[str, Dict[str, int]]]:
+    """Read every symbol + endpoint label with per-label read accounting.
+
+    Returns ``(symbols, {label: {rows_read, expected, kept}})`` — the
+    per-label-accounted ``symbol_universe`` that makes a future
+    resultset-cap regression visible in the sync report.
+    """
+    symbols: List[EngineSymbol] = []
+    by_label: Dict[str, Dict[str, int]] = {}
+    for label in CODE_SYMBOL_LABELS:
+        try:
+            label_symbols, stats = _read_labeled_symbols_paged(
+                code_graph, label, project_id_normalized, parser_type or "", "symbol", batch
+            )
+        except Exception as exc:  # noqa: BLE001 - per-label degradation
+            print(
+                f"[link-engine] warning: label {label} unreadable ({exc})",
+                file=sys.stderr,
+            )
+            # stay visible in the universe accounting — never vanish
+            by_label[label] = {"rows_read": 0, "expected": 0, "kept": 0, "error": 1}
+            continue
+        symbols.extend(label_symbols)
+        by_label[label] = stats
+    for label in CODE_ENDPOINT_LABELS:
+        try:
+            label_symbols, stats = _read_labeled_symbols_paged(
+                code_graph, label, project_id_normalized, parser_type or "", "endpoint", batch
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[link-engine] warning: endpoint label {label} unreadable ({exc})",
+                file=sys.stderr,
+            )
+            by_label[label] = {"rows_read": 0, "expected": 0, "kept": 0, "error": 1}
+            continue
+        symbols.extend(label_symbols)
+        by_label[label] = stats
+    return symbols, by_label
 
 
 def read_code_symbols(
@@ -230,29 +458,10 @@ def read_code_symbols(
     """Read symbol + endpoint labels; a missing label degrades to a warning.
 
     Graphs from older parsers lack some framework labels — one dead label
-    must not take the whole build down.
+    must not take the whole build down. Reads are paginated, so the
+    server's ``resultset_size`` never silently drops rows.
     """
-    symbols: List[EngineSymbol] = []
-    for label in CODE_SYMBOL_LABELS:
-        try:
-            symbols.extend(
-                _read_labeled_symbols(code_graph, label, project_id_normalized, parser_type or "", "symbol")
-            )
-        except Exception as exc:  # noqa: BLE001 - per-label degradation
-            print(
-                f"[link-engine] warning: label {label} unreadable ({exc})",
-                file=sys.stderr,
-            )
-    for label in CODE_ENDPOINT_LABELS:
-        try:
-            symbols.extend(
-                _read_labeled_symbols(code_graph, label, project_id_normalized, parser_type or "", "endpoint")
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[link-engine] warning: endpoint label {label} unreadable ({exc})",
-                file=sys.stderr,
-            )
+    symbols, _by_label = read_code_symbols_report(code_graph, project_id_normalized, parser_type)
     return symbols
 
 
@@ -301,24 +510,21 @@ def split_shas_by_side(
     return doc_shas, code_shas
 
 
-def load_code_inventory_hashes(
+def _read_folder_inventory_entries(
     code_folders: Iterable[str],
     project_id: str,
-    project_dir: Path,
-) -> Dict[str, str]:
-    """Read per-file SHAs from the newest code-sync inventory per folder.
+) -> List[Tuple[str, Dict[str, str]]]:
+    """Newest per-folder inventory as ``(resolved_folder, {rel → sha})``.
 
-    Chain: ``{folder}/.cache/incremental_sync/{safe_project}_{scope}.json``
-    → ``inventory_path`` → ``{folder}/.cache/inventories/{snapshot}.json``
-    with ``entries: {rel_path: {sha256, …}}``. Paths are re-expressed
-    relative to ``project_dir`` when the folder lives inside it, else kept
-    folder-relative (identity stays stable either way).
+    Shared chain reader for both flat and repo-aware baseline loaders:
+    ``{folder}/.cache/incremental_sync/{safe_project}_{scope}.json`` →
+    ``inventory_path`` → ``{folder}/.cache/inventories/{snapshot}.json``
+    with ``entries: {rel_path: {sha256, …}}``.
     """
     import re
 
     safe_project = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(project_id)).strip("._") or "project"
-    merged: Dict[str, str] = {}
-    project_dir = Path(project_dir).resolve()
+    result: List[Tuple[str, Dict[str, str]]] = []
     for folder in code_folders:
         cache_dir = Path(folder).expanduser() / ".cache" / "incremental_sync"
         if not cache_dir.is_dir():
@@ -352,19 +558,223 @@ def load_code_inventory_hashes(
         if not isinstance(entries, Mapping):
             continue
         folder_root = Path(folder).expanduser().resolve()
+        mapping: Dict[str, str] = {}
         for rel, entry in entries.items():
             if not isinstance(entry, Mapping):
                 continue
             sha = entry.get("sha256")
             if not sha:
                 continue
+            mapping[link_store.posix_path(rel)] = str(sha)
+        if mapping:
+            result.append((str(folder_root), mapping))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# SHA join (LINK_CONTRACT.md §1.5): baseline keys ↔ graph identities
+# ---------------------------------------------------------------------------
+
+JOIN_MATCHED = "matched"
+JOIN_MISSING = "missing"
+JOIN_AMBIGUOUS = "ambiguous"
+
+
+def flatten_doc_rel(rel: str) -> str:
+    """dev.py's ``source_id`` rule: POSIX rel with both separators → ``__``.
+
+    Mirrors ``doc-tiny/graphrag_ingest_langextract._safe_source_id`` (and
+    dev.py ``_prune_yake_rule_files``): ``a/b.md`` → ``a__b.md``. Never
+    applied in reverse — file names may legitimately contain ``__``.
+    """
+    posix = link_store.posix_path(rel)
+    return posix.replace("/", "__").replace("\\", "__")
+
+
+def normalize_repo_key(value: Any) -> str:
+    """Canonical lookup key for a graph ``repo`` / configured folder.
+
+    Resolved absolute POSIX path, casefolded for lookup only (macOS/Windows
+    case-insensitivity). Empty input maps to ``""`` — never a folder key.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        return Path(text).expanduser().resolve().as_posix().casefold()
+    except OSError:
+        return Path(text).as_posix().casefold()
+
+
+@dataclass(frozen=True)
+class DocShaIndex:
+    """Baseline lookup structure for one build (built once, not per record).
+
+    ``direct`` holds POSIX rel keys, ``flattened`` their ``__``-spelling
+    (dev.py ``source_id``), ``stems`` groups keys per file stem. A
+    flattened id or stem shared by keys with *different* SHAs maps to
+    ``None`` — genuine upstream ambiguity degrades to null, never a guess
+    (the graph itself cannot tell the two files apart).
+    """
+
+    direct: Dict[str, str]
+    flattened: Dict[str, Optional[str]]
+    stems: Dict[str, List[str]]
+
+
+def build_doc_sha_index(doc_shas: Mapping[str, str]) -> DocShaIndex:
+    direct: Dict[str, str] = {}
+    flattened: Dict[str, Optional[str]] = {}
+    stems: Dict[str, List[str]] = {}
+    for rel, sha in doc_shas.items():
+        posix = link_store.posix_path(rel)
+        direct[posix] = str(sha)
+        flat_id = flatten_doc_rel(posix)
+        existing = flattened.get(flat_id)
+        if flat_id in flattened and existing != sha:
+            flattened[flat_id] = None  # differing SHAs → ambiguous, stays so
+        elif existing is None:
+            flattened[flat_id] = str(sha)
+        stems.setdefault(Path(posix).stem, []).append(posix)
+    return DocShaIndex(direct=direct, flattened=flattened, stems=stems)
+
+
+def _doc_sha_for(doc_id: str, index: DocShaIndex) -> Optional[str]:
+    """Doc SHA per contract: direct rel → flattened → agreeing stem set."""
+    doc_id = link_store.posix_path(doc_id)
+    if not doc_id:
+        return None
+    sha = index.direct.get(doc_id)
+    if sha:
+        return sha
+    sha = index.flattened.get(doc_id)
+    if sha:
+        return sha
+    keys = index.stems.get(doc_id)
+    if keys:
+        stem_shas = {index.direct[key] for key in keys}
+        if len(stem_shas) == 1:
+            return next(iter(stem_shas))  # same content under one stem: exact
+    return None
+
+
+class CodeShaIndex:
+    """Repo-aware resolver: ``(graph repo, graph path)`` → inventory SHA.
+
+    Resolution order (never a naive suffix match — the live deployment carries 1
+    exact cross-folder collision and 152 suffix shadows):
+
+    1. ``(repo, path)`` exact against the repo-aware folder maps;
+    2. a ``repo`` pinning a KNOWN folder is authoritative: a path its map
+       lacks is ``missing`` — another folder's same-spelled file is a
+       different file, never a borrowed SHA;
+    3. unique cross-folder fallback — only when ``repo`` is null/foreign
+       (endpoint labels; parsers stamping a project root): exactly one
+       known folder whose folder-relative map contains ``path``;
+    4. flat-map direct hit, then a unique component-boundary suffix match
+       over flat project-relative keys (legacy callers);
+    5. otherwise ``missing``; more than one candidate → ``ambiguous``.
+    """
+
+    def __init__(
+        self,
+        folders: Optional[Mapping[str, Mapping[str, str]]] = None,
+        flat: Optional[Mapping[str, str]] = None,
+    ):
+        self.folders: Dict[str, Dict[str, str]] = {
+            normalize_repo_key(folder): dict(mapping)
+            for folder, mapping in (folders or {}).items()
+            if normalize_repo_key(folder)
+        }
+        self.flat: Dict[str, str] = {
+            link_store.posix_path(rel): str(sha)
+            for rel, sha in (flat or {}).items()
+        }
+        # basename → flat keys sharing it (bounds the suffix fallback)
+        self._flat_by_basename: Dict[str, List[str]] = {}
+        for key in self.flat:
+            self._flat_by_basename.setdefault(Path(key).name, []).append(key)
+
+    def resolve(self, repo: Any, path: str) -> Tuple[Optional[str], str]:
+        path = link_store.posix_path(path)
+        if not path:
+            return None, JOIN_MISSING
+        repo_key = normalize_repo_key(repo)
+        folder = self.folders.get(repo_key) if repo_key else None
+        if folder is not None:
+            # the pin is authoritative — no borrowing across folders
+            if path in folder:
+                return folder[path], JOIN_MATCHED
+            return None, JOIN_MISSING
+        if self.folders:
+            hits = [
+                mapping[path]
+                for mapping in self.folders.values()
+                if path in mapping
+            ]
+            if len(hits) == 1:
+                return hits[0], JOIN_MATCHED
+            if len(hits) > 1:
+                return None, JOIN_AMBIGUOUS
+        sha = self.flat.get(path)
+        if sha:
+            return sha, JOIN_MATCHED
+        suffix_hits = [
+            self.flat[key]
+            for key in self._flat_by_basename.get(Path(path).name, ())
+            if key.endswith("/" + path)
+        ]
+        if len(suffix_hits) == 1:
+            return suffix_hits[0], JOIN_MATCHED
+        if len(suffix_hits) > 1:
+            return None, JOIN_AMBIGUOUS
+        return None, JOIN_MISSING
+
+
+def load_code_inventory_hashes(
+    code_folders: Iterable[str],
+    project_id: str,
+    project_dir: Path,
+) -> Dict[str, str]:
+    """Read per-file SHAs from the newest code-sync inventory per folder.
+
+    Flat project-wide view: paths are re-expressed relative to
+    ``project_dir`` when the folder lives inside it, else kept
+    folder-relative (identity stays stable either way). The repo-aware
+    view lives in :func:`load_code_folder_inventories`.
+    """
+    merged: Dict[str, str] = {}
+    project_dir = Path(project_dir).resolve()
+    for folder_root, mapping in _read_folder_inventory_entries(code_folders, project_id):
+        folder_path = Path(folder_root)
+        for rel, sha in mapping.items():
             try:
-                absolute = (folder_root / rel).resolve()
+                absolute = (folder_path / rel).resolve()
                 stored = absolute.relative_to(project_dir).as_posix()
             except ValueError:
-                stored = link_store.posix_path(rel)
-            merged[stored] = str(sha)
+                stored = rel
+            merged[stored] = sha
     return merged
+
+
+def load_code_folder_inventories(
+    code_folders: Iterable[str],
+    project_id: str,
+) -> Dict[str, Dict[str, str]]:
+    """Repo-aware baseline: ``{resolved scan folder → {folder_rel → sha}}``.
+
+    Folder keys are the resolved absolute POSIX paths the code graph's
+    ``repo`` property stamps (``normalize_repo_key`` matches them,
+    casefolded on lookup only). Values stay **folder-relative** — the
+    same spelling the graph's ``file_path`` uses — so the
+    ``(repo, path)`` join is an exact dict hit.
+    """
+    return {
+        folder_root: dict(mapping)
+        for folder_root, mapping in _read_folder_inventory_entries(
+            code_folders, project_id
+        )
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -372,16 +782,16 @@ def load_code_inventory_hashes(
 # ---------------------------------------------------------------------------
 
 
-def _doc_sha_for(doc_id: str, doc_shas: Mapping[str, str]) -> Optional[str]:
-    """Resolve a document SHA; ``doc_id`` is the folder-mode rel path."""
-    direct = doc_shas.get(link_store.posix_path(doc_id))
-    if direct:
-        return direct
-    # single-file mode: source_id is the file stem without extension
-    for rel, sha in doc_shas.items():
-        if Path(rel).stem == doc_id:
-            return sha
-    return None
+def _code_identity_of(record: Mapping[str, Any]) -> tuple:
+    """Record-side code identity (mirrors ``EngineSymbol.identity``)."""
+    code = record.get("code") or {}
+    lines = code.get("lines") or [None, None]
+    return (
+        link_store.posix_path(code.get("path")),
+        str(code.get("name") or ""),
+        (lines[0], lines[1]),
+        str(code.get("target_type") or "symbol"),
+    )
 
 
 def build_record(
@@ -471,6 +881,7 @@ def build_links(
     parser_type: Optional[str] = None,
     reconcile: bool = False,
     dry_run: bool = False,
+    code_folder_shas: Optional[Mapping[str, Mapping[str, str]]] = None,
 ) -> BuildReport:
     """Run the full pipeline for one project.
 
@@ -478,29 +889,81 @@ def build_links(
     doc graph against the code symbol index; (3) score/provenance stamp;
     (4) stale propagation (append-only); (5) write records + state.
 
+    ``code_folder_shas`` is the repo-aware baseline
+    ({resolved folder → {folder_rel → sha}}, see
+    :func:`load_code_folder_inventories`); ``code_shas`` stays as the flat
+    fallback. SHAs join per LINK_CONTRACT.md §1.5.
+
     ``dry_run`` computes everything and writes nothing.
     """
     links_dir = Path(links_dir)
+    doc_index = build_doc_sha_index(doc_shas)
+    code_index = CodeShaIndex(code_folder_shas or {}, code_shas)
 
     # Step 1 — delta inputs from the graphs + baselines.
     paragraphs = read_doc_paragraphs(doc_graph, _norm(project_id))
     entity_mentions = read_doc_entity_names(doc_graph, _norm(project_id))
-    symbols = read_code_symbols(code_graph, _norm(project_id), parser_type)
+    symbols, symbol_stats = read_code_symbols_report(
+        code_graph, _norm(project_id), parser_type
+    )
     paragraph_anchors = {paragraph.anchor for paragraph in paragraphs}
     symbol_identities = {symbol.identity for symbol in symbols}
+    # server-side universe: Σ per-label counts (== Σ kept on clean reads;
+    # a gap means truncation/dead labels and is visible per label)
+    symbol_universe_expected = sum(
+        int(stats.get("expected") or 0) for stats in symbol_stats.values()
+    )
+
+    # Destructive-read guard: only the CODE reads swallow per-label
+    # failures into an empty set — a graph read that collapses to zero
+    # symbols must never stale-mark a non-empty link set (pagination
+    # dialect failure, wrong store, dead label set). Doc reads either
+    # raise (build fails loudly) or a genuine doc wipe should stale.
+    # Reconcile states operator intent and bypasses the guard.
+    if not reconcile and not dry_run and not symbols:
+        prior_state = link_store.load_state(links_dir) or {}
+        prior_active = ((prior_state.get("counts") or {}).get("active")) or 0
+        if prior_active > 0:
+            raise LinkEngineError(
+                f"code-symbol read collapsed to 0 (paragraphs="
+                f"{len(paragraphs)}) against {prior_active} active links "
+                "— refusing to stale-mark; check the store and re-run, "
+                "or use --reconcile to force"
+            )
+
+    # One join per identity, resolved once and shared by the write and
+    # drift paths — duplicate graph identities (same path/name/lines in
+    # two scan folders) must not get different SHAs on the two paths.
+    code_join_by_identity: Dict[tuple, Tuple[Optional[str], str]] = {}
+    for symbol in symbols:
+        if symbol.identity not in code_join_by_identity:
+            code_join_by_identity[symbol.identity] = code_index.resolve(
+                symbol.repo, symbol.path
+            )
 
     # Steps 2–3 — fresh candidate pairs with shas joined in.
     fresh_pairs = compute_fresh_pairs(paragraphs, entity_mentions, symbols)
-    fresh_records = [
-        build_record(
-            project_id=project_id,
-            paragraph=paragraph,
-            symbol=symbol,
-            doc_sha=_doc_sha_for(paragraph.doc_id, doc_shas),
-            code_sha=code_shas.get(symbol.path),
+    sha_join = _empty_sha_join()
+    fresh_records: List[Dict[str, Any]] = []
+    for paragraph, symbol in fresh_pairs:
+        doc_sha = _doc_sha_for(paragraph.doc_id, doc_index)
+        sha_join["doc_matched" if doc_sha else "doc_missing"] += 1
+        code_sha, outcome = code_join_by_identity[symbol.identity]
+        if outcome == JOIN_AMBIGUOUS:
+            sha_join["code_ambiguous"] += 1
+        elif outcome == JOIN_MATCHED:
+            sha_join["code_matched"] += 1
+        else:
+            sha_join["code_missing"] += 1
+        fresh_records.append(
+            build_record(
+                project_id=project_id,
+                paragraph=paragraph,
+                symbol=symbol,
+                doc_sha=doc_sha,
+                code_sha=code_sha,
+            )
         )
-        for paragraph, symbol in fresh_pairs
-    ]
 
     # Existing state: latest record per key drives the skip / stale rules.
     existing = link_store.load_links(links_dir)
@@ -509,12 +972,16 @@ def build_links(
         latest[link_store.record_key(record)] = record
 
     def _sha_changed(record: Mapping[str, Any]) -> bool:
-        doc_sha = _doc_sha_for(str((record.get("doc") or {}).get("doc_id") or ""), doc_shas)
+        doc_sha = _doc_sha_for(
+            str((record.get("doc") or {}).get("doc_id") or ""), doc_index
+        )
         previous_doc_sha = (record.get("doc") or {}).get("source_sha")
         if doc_sha and previous_doc_sha and doc_sha != previous_doc_sha:
             return True
-        code_path = link_store.posix_path((record.get("code") or {}).get("path"))
-        code_sha = code_shas.get(code_path)
+        # same join result the write path used (first-wins per identity)
+        code_sha, _outcome = code_join_by_identity.get(
+            _code_identity_of(record), (None, JOIN_MISSING)
+        )
         previous_code_sha = (record.get("code") or {}).get("source_sha")
         if code_sha and previous_code_sha and code_sha != previous_code_sha:
             return True
@@ -522,15 +989,7 @@ def build_links(
 
     # Step 4a — stale propagation for drifted/deleted sides (append-only).
     def _drifted(record: Mapping[str, Any]) -> bool:
-        code = record.get("code") or {}
-        lines = code.get("lines") or [None, None]
-        identity = (
-            link_store.posix_path(code.get("path")),
-            str(code.get("name") or ""),
-            (lines[0], lines[1]),
-            str(code.get("target_type") or "symbol"),
-        )
-        if identity not in symbol_identities:
+        if _code_identity_of(record) not in symbol_identities:
             return True  # code deleted or renamed — no auto re-match here
         doc = record.get("doc") or {}
         anchor = (str(doc.get("doc_id") or ""), doc.get("paragraph_id"))
@@ -589,6 +1048,9 @@ def build_links(
                     "total": len(projected),
                 },
                 "coverage": coverage,
+                "sha_join": dict(sha_join),
+                "symbol_universe_by_label": symbol_stats,
+                "symbol_universe_expected": symbol_universe_expected,
             },
         )
 
@@ -602,6 +1064,9 @@ def build_links(
         dry_run=dry_run,
         reconcile=reconcile,
         coverage=coverage,
+        sha_join=sha_join,
+        symbol_universe_by_label=symbol_stats,
+        symbol_universe_expected=symbol_universe_expected,
     )
 
 
@@ -621,16 +1086,28 @@ def _utc_now() -> str:
 
 __all__ = [
     "BuildReport",
+    "CODE_ENDPOINT_LABELS",
+    "CODE_SYMBOL_LABELS",
     "DOC_EXTENSIONS",
+    "DocShaIndex",
     "EngineSymbol",
+    "JOIN_AMBIGUOUS",
+    "JOIN_MATCHED",
+    "JOIN_MISSING",
     "LinkEngineError",
     "ParagraphRef",
+    "build_doc_sha_index",
     "build_links",
     "build_record",
     "compute_fresh_pairs",
+    "flatten_doc_rel",
+    "load_code_folder_inventories",
     "load_code_inventory_hashes",
     "load_sync_state_hashes",
+    "normalize_repo_key",
+    "SYMBOL_READ_BATCH",
     "read_code_symbols",
+    "read_code_symbols_report",
     "read_doc_entity_names",
     "read_doc_paragraphs",
     "split_shas_by_side",
