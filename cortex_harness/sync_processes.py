@@ -11,7 +11,7 @@ from typing import Iterable, Literal
 import psutil
 
 
-SyncOwner = Literal["code", "doc"]
+SyncOwner = Literal["code", "doc", "link"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,18 @@ def _is_doc_worker(record: ProcessRecord, root: Path) -> bool:
     return any(_resolved_argument(argument) == ingestor for argument in record.argv)
 
 
+def _is_link_worker(record: ProcessRecord, root: Path) -> bool:
+    worker = (root / "link-tiny" / "link_worker.py").resolve(strict=False)
+    return any(_resolved_argument(argument) == worker for argument in record.argv)
+
+
+_WORKER_MATCHERS = {
+    "code": _is_code_worker,
+    "doc": _is_doc_worker,
+    "link": _is_link_worker,
+}
+
+
 def sync_processes(
     owner: SyncOwner,
     *,
@@ -111,15 +123,13 @@ def sync_processes(
 
     table = process_table() if processes is None else processes
     excluded = {int(pid) for pid in exclude_pids}
+    worker_matcher = _WORKER_MATCHERS.get(owner)
     matches: list[ProcessRecord] = []
     for record in table.values():
         if record.pid in excluded:
             continue
-        if (include_launchers and _is_dev_sync(record, owner, root)) or (
-            _is_code_worker(record, root)
-            if owner == "code"
-            else _is_doc_worker(record, root)
-        ):
+        is_worker = worker_matcher is not None and worker_matcher(record, root)
+        if (include_launchers and _is_dev_sync(record, owner, root)) or is_worker:
             matches.append(record)
     return sorted(matches, key=lambda item: item.pid)
 

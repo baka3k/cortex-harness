@@ -111,3 +111,17 @@ A parser-less call to any of the 13 fan-out search tools
   does not silently drop profile labels outside the legacy hardcoded set.
 - `parsers_failed` is advisory, not fatal: presence means at least one
   engine errored (e.g. `OVERLOADED` on the admission lane).
+
+## link-tiny server (link_mcp, :8790)
+
+Doc↔code traceability facade (plan
+`261019-1126-link-tiny-doc-code-traceability`, contract in
+`docs/LINK_CONTRACT.md`). The server reads only `links.jsonl`/`state.json`
+from the instance links directory and delegates content over HTTP; it is
+read-only by construction and emits the shared v2 tool-result envelope.
+
+| Tool | Scope | Degrade behavior | Acceptance evidence |
+|---|---|---|---|
+| `find_code_for_doc` | active exact-name links, ranked | upstream down → refs + `content unavailable`, ok=true | `tests/test_link_acceptance.py::test_acceptance_pipeline_e2e` |
+| `find_doc_for_code` | reverse lookup by symbol identity | no links → empty + `run 'dev sync link'` hint | same |
+| `trace_status` | state snapshot + staleness verdict | missing/stale state → `run 'dev sync link'` annotation | `link-tiny/tests/test_mcp_tools.py` |

@@ -26,6 +26,7 @@ CLI_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = CLI_DIR.parent
 CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
+LINK_TINY = REPO_ROOT / "link-tiny"
 
 # Hostnames treated as "local" — credential prompts are skipped for these
 # endpoints because localhost Docker containers don't use auth.
@@ -211,6 +212,21 @@ MCP_SERVICES = {
         "port":    8789,
         "pattern": "mcp_graph_rag.py",
         "url":     "http://127.0.0.1:8789/mcp",
+    },
+    # Opt-in third server: launched by `dev start --server link` (the
+    # lifecycle keeps `all` = code + doc in Phase 1). The pattern is the
+    # absolute-path substring `_mcp_start_one` puts in the cmdline, unique
+    # vs code-tiny's fastmcp_server.py. `default: False` keeps bulk
+    # consumers (`dev mcp start/add`) from touching it.
+    "link-tiny": {
+        "dir":     LINK_TINY,
+        "cmd":     ["mcp_server.py",
+                    "--transport", "streamable-http",
+                    "--host", "127.0.0.1", "--port", "8790", "--path", "/mcp"],
+        "port":    8790,
+        "pattern": f"link-tiny{os.sep}mcp_server.py",
+        "url":     "http://127.0.0.1:8790/mcp",
+        "default": False,
     },
 }
 
@@ -849,6 +865,11 @@ def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
         result = _code_env_for_process(cfg, config_root, config_path=cfg_path)
     elif service_name == "doc-tiny":
         result = _doc_env_for_process(cfg, config_root, config_path=cfg_path)
+    elif service_name == "link-tiny":
+        # The facade opens no store; it needs the instance identity (links/
+        # layout) and the registry config path. The code-owner overlay
+        # carries both plus both role paths as a harmless extra.
+        result = _code_env_for_process(cfg, config_root, config_path=cfg_path)
     else:
         return {}
     result["CORTEX_HARNESS_CONFIG_PATH"] = str(Path(os.path.abspath(cfg_path)))
@@ -2759,7 +2780,7 @@ def storage_stop():
 
 
 @cli.command()
-@click.option("--server", type=click.Choice(["all", "code", "doc"]), default="all", show_default=True)
+@click.option("--server", type=click.Choice(["all", "code", "doc", "link"]), default="all", show_default=True)
 @click.option("--name", help="Named instance used for concurrent start/stop operations.")
 @click.option("--project", help="Project ID; also defaults database and vector collection names.")
 @click.option("--database", "--db", help="Graph database used by every selected MCP server.")
@@ -3899,6 +3920,145 @@ def sync_doc_stop(ctx):
     )
 
 
+# ── sync link ────────────────────────────────────────────────────────────────
+
+
+@contextmanager
+def _link_process_scope(project_path: Path, *, enabled: bool):
+    """Serialize link runs per project with the advisory lock only.
+
+    Unlike code/doc syncs, the link engine opens both graphs lease-free
+    (``code-tiny/tools/graph/read_only_opener.py``), so nothing here pauses
+    MCP servers or sweeps embedded stores — either would take down running
+    servers for no benefit. Only the ``sync-link.lock`` serialization (and
+    its Ctrl-C cleanup) applies.
+    """
+    if not enabled:
+        yield
+        return
+
+    import portalocker
+
+    lock_dir = project_path / SYNC_STATE_DIR
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / "sync-link.lock"
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        try:
+            portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except (portalocker.LockException, OSError):
+            raise click.ClickException(
+                "Another 'dev sync link' run is active. Wait for it to "
+                "finish, or run 'dev sync link stop' to clear a stuck run."
+            )
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()))
+        handle.flush()
+        try:
+            yield
+        finally:
+            portalocker.unlock(handle)
+    finally:
+        handle.close()
+
+
+def _run_link_sync(options: dict) -> None:
+    """Spawn the link worker for the active (or requested) project."""
+    project_path = Path(options["project_dir"]).resolve()
+    cfg, cfg_path = _load_active_config(project_path)
+    project = cfg.get("project", {})
+    project_id = (
+        options.get("project_id")
+        or project.get("code")
+        or project.get("name")
+    )
+    if not project_id:
+        raise click.ClickException(
+            "No project id: pass --project or run 'dev init' first."
+        )
+
+    env = _code_env_for_process(cfg, project_path)
+    if cfg_path is not None:
+        env["CORTEX_HARNESS_CONFIG_PATH"] = str(cfg_path)
+    cmd = [
+        _venv_python(LINK_TINY),
+        str(LINK_TINY / "link_worker.py"),
+        "--project-id", str(project_id),
+        "--project-dir", str(project_path),
+    ]
+    if cfg_path is not None:
+        cmd += ["--config-dir", str(cfg_path)]
+    if options.get("reconcile"):
+        cmd.append("--reconcile")
+    if options.get("dry_run"):
+        cmd.append("--dry-run")
+        click.echo(f"[dry-run] {' '.join(cmd)}")
+
+    with _link_process_scope(project_path, enabled=not options.get("dry_run")):
+        result = subprocess.run(cmd, env=env)
+    if result.returncode == 2:
+        raise click.ClickException(
+            "link sync failed: invalid input (see worker output above)"
+        )
+    if result.returncode != 0:
+        raise click.ClickException(
+            f"link sync failed with exit code {result.returncode}"
+        )
+
+
+@sync.group("link", invoke_without_command=True)
+@click.option("--project-dir", default=".", show_default=True)
+@click.option("--dry-run", is_flag=True, help="Print would-be links without writing.")
+@click.option(
+    "--project",
+    "project_id",
+    default=None,
+    help="Project id to link (default: the active project).",
+)
+@click.option(
+    "--reconcile",
+    is_flag=True,
+    help="Force a full rebuild, superseding all existing links.",
+)
+@click.pass_context
+def sync_link(ctx, project_dir, dry_run, project_id, reconcile):
+    """Build doc↔code traceability links (exact-name, Phase 1).
+
+    \b
+    Reads both graphs lease-free and appends links.jsonl + state.json
+    under {instance}/links/{project_id}/. Standalone by design: run it
+    after 'dev sync code' AND 'dev sync doc' — linking at either sync's
+    time would see a half-fresh world. Stale data is annotated by
+    link_mcp at query time, never rebuilt there.
+    Sub-command:
+      stop     Stop running link workers.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj.update(
+        project_dir=project_dir,
+        dry_run=dry_run,
+        project_id=project_id,
+        reconcile=reconcile,
+    )
+
+    if ctx.invoked_subcommand is not None:
+        return
+
+    _run_link_sync(ctx.obj)
+
+
+@sync_link.command("stop")
+@click.option("--project-dir", default=".", show_default=True)
+def sync_link_stop(project_dir):
+    """Stop all running link sync workers.
+
+    The engine owns no store lease, so nothing else is stopped here.
+    """
+    report = stop_sync_processes("link", root=REPO_ROOT, include_launchers=True)
+    _echo_sync_stop_report(report, prefix="link")
+
+
 # ── sync code add ─────────────────────────────────────────────────────────────
 
 @sync_code.command("add")
@@ -4116,7 +4276,11 @@ def mcp_start(force_restart, project_dir):
     Logs: .cache/dev-mcp-<name>.log
     """
     project_path = Path(project_dir).resolve()
+    # Opt-in servers (default: False, e.g. link-tiny) never start in bulk —
+    # the explicit path is `dev start --server link` (lifecycle launch).
     for name, svc in MCP_SERVICES.items():
+        if not svc.get("default", True):
+            continue
         pattern = svc["pattern"]
         pids    = _mcp_pids(pattern)
 
@@ -4167,6 +4331,7 @@ def mcp_add(scope, agent, project_dir):
     entries = {
         name: {"type": "http", "url": svc["url"]}
         for name, svc in MCP_SERVICES.items()
+        if svc.get("default", True)  # opt-in servers (link-tiny) stay out
     }
 
     # ── workspace scope ───────────────────────────────────────────────────

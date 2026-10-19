@@ -292,7 +292,9 @@ class MakeLifecycleTests(unittest.TestCase):
 
             records = json.loads(pid_file.read_text(encoding="utf-8"))
             self.assertEqual([record["name"] for record in records], ["code-tiny", "doc-tiny"])
-            for server in LIFECYCLE.SERVERS:
+            # --server all starts only the default (non-opt-in) servers;
+            # link-tiny is Phase-1 opt-in (`--server link`) and gets no launcher here.
+            for server in LIFECYCLE.selected_servers(LIFECYCLE.start_options([])):
                 launcher = state_dir / f"start-cortext-{server['name']}.command"
                 runtime_env = state_dir / f"cortext-{server['name']}.active.env"
                 self.assertTrue(launcher.is_file())

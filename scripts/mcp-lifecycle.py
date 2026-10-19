@@ -78,6 +78,16 @@ SERVERS = (
         "script": ROOT / "doc-tiny" / "mcp.sh",
         "port": 8789,
     },
+    {
+        # Opt-in third server: ``--server link`` (startswith match) selects
+        # it; ``default: False`` keeps ``--server all`` = code + doc in
+        # Phase 1 (link_mcp launches explicitly, never by default).
+        "name": "link-tiny",
+        "work_dir": ROOT / "link-tiny",
+        "script": ROOT / "link-tiny" / "mcp.sh",
+        "port": 8790,
+        "default": False,
+    },
 )
 
 # Idempotent container specs consumed by ``_ensure_docker_services``. Each entry
@@ -198,8 +208,10 @@ INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MCP_PROCESS_MARKERS = (
     "code-tiny/mcp.sh",
     "doc-tiny/mcp.sh",
+    "link-tiny/mcp.sh",
     "mcp/unified_mcp.py",
     "mcp_graph_rag.py",
+    "link-tiny/mcp_server.py",
 )
 RUNTIME_METADATA_KEYS = frozenset(
     {
@@ -295,6 +307,7 @@ def requirement_files() -> list[Path]:
         ROOT / "requirements.txt",
         ROOT / "code-tiny" / "requirements.txt",
         ROOT / "doc-tiny" / "requirements.txt",
+        ROOT / "link-tiny" / "requirements.txt",
     )
     return [requirements for requirements in candidates if requirements.is_file()]
 
@@ -2309,7 +2322,15 @@ def next_available_port(host: str, preferred: int, reserved: set[int]) -> int:
 
 
 def selected_servers(options: argparse.Namespace) -> list[dict[str, object]]:
-    selected = [dict(server) for server in SERVERS if options.server == "all" or server["name"].startswith(options.server)]
+    selected = [
+        dict(server)
+        for server in SERVERS
+        if (
+            server["name"].startswith(options.server)
+            if options.server != "all"
+            else server.get("default", True)
+        )
+    ]
     if options.port is not None and options.server == "all":
         raise RuntimeError("--port requires --server code or --server doc; use --code-port/--doc-port for both.")
     if options.port is not None:
@@ -2336,6 +2357,16 @@ def runtime_overrides(
     multiple_servers: bool,
     environment: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    if server_name == "link-tiny":
+        # The link facade opens no store: graph names resolve through the
+        # project registry at runtime, so provider/database/collection
+        # overrides do not apply. It only needs the instance identity to
+        # locate links/ beside the storage manifest.
+        return {
+            "MCP_SERVER_NAME": f"{instance}-link" if multiple_servers else instance,
+            "CORTEX_STORAGE_INSTANCE": instance.casefold().replace(".", "-"),
+            "CORTEX_STORAGE_OWNER": "code",
+        }
     is_code = server_name == "code-tiny"
     database = options.code_database if is_code else options.doc_database
     database = database or options.database or options.project
@@ -2543,7 +2574,7 @@ def port_number(value: str) -> int:
 
 def start_options(arguments: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="mcp-lifecycle.py start")
-    parser.add_argument("--server", choices=("all", "code", "doc"), default="all")
+    parser.add_argument("--server", choices=("all", "code", "doc", "link"), default="all")
     parser.add_argument("--name")
     parser.add_argument("--project")
     parser.add_argument("--database", "--db")
