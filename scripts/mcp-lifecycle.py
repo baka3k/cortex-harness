@@ -50,6 +50,11 @@ VENV_DIR = ROOT / ".venv"
 PYTHON_DEPENDENCY_PROBE = (
     "import qdrant_client, requests; "
     "import cortex_harness.storage; "
+    # Component requirements that are not in pyproject.toml: one light marker
+    # per server (fastmcp = all servers, pypdf = doc-tiny, tree_sitter =
+    # code-tiny) so a .venv reduced to the pyproject set is reported here
+    # instead of as an ImportError inside `dev sync`.
+    "import fastmcp, pypdf, tree_sitter; "
     + (
         "from redislite.falkordb_client import FalkorDB"
         if os.name != "nt"
@@ -57,7 +62,7 @@ PYTHON_DEPENDENCY_PROBE = (
     )
 )
 PYTHON_DEPENDENCY_LABEL = (
-    "qdrant_client, requests, cortex_harness.storage, "
+    "qdrant_client, requests, cortex_harness.storage, fastmcp, pypdf, tree_sitter, "
     + (
         "FalkorDBLite backend"
         if os.name != "nt"
@@ -1837,6 +1842,7 @@ def invoke_doctor() -> None:
             stderr = (result.stderr or "").strip()
             if stderr:
                 print(f"[doctor] {stderr.splitlines()[-1]}")
+            print("[doctor] Run `make build` to reinstall the component requirements into .venv.")
 
     # Production paths are inspected, but write probes always use an isolated
     # temporary data root so doctor cannot change registered project data.

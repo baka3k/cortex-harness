@@ -37,6 +37,15 @@ dev = [
     "pytest-asyncio>=1.0,<2",
 ]
 
+[tool.uv]
+# The runtime dependency contract is the requirements.txt set installed by
+# `make build` (root + code-tiny + doc-tiny + link-tiny), not the minimal
+# `[project.dependencies]` above. `uv sync` / `uv lock` reconcile .venv to
+# pyproject.toml exactly and would uninstall everything else (pypdf,
+# sentence-transformers, gliner, tree-sitter, ...), so they are refused here;
+# `uv run` keeps using .venv without an implicit sync.
+managed = false
+
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 pythonpath = ["code-tiny", "doc-tiny"]
