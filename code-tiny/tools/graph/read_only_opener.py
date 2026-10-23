@@ -31,6 +31,20 @@ class ReadOnlyOpenError(RuntimeError):
     """Raised when a store cannot be opened read-only."""
 
 
+def _read_query_timeout_ms() -> int:
+    """Per-query read timeout (ms), mirroring the ``FalkorDBDriver`` read lane.
+
+    FalkorDB servers default their ``timeout`` config to 1000ms; a paged
+    read of a large graph re-runs the full traversal + sort on every page,
+    so deep pages blow past it and die with ``Query timed out``. Same env
+    knob and default as the driver so one setting bounds both paths.
+    """
+    timeout_ms = int(os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "30000"))
+    if timeout_ms <= 0:
+        raise ValueError("FALKORDB_QUERY_TIMEOUT_MS must be a positive integer")
+    return timeout_ms
+
+
 class ReadOnlyGraph:
     """Uniform read handle over one graph in one store."""
 
@@ -42,12 +56,14 @@ class ReadOnlyGraph:
         _client: Any = None,
         _graph: Any = None,
         _ladybug_resources: Optional[tuple] = None,
+        _query_timeout_ms: int = 0,
     ):
         self.backend = backend
         self.graph_name = graph_name
         self._client = _client
         self._graph = _graph
         self._ladybug_resources = _ladybug_resources
+        self._query_timeout_ms = _query_timeout_ms
 
     def run(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         params = dict(parameters or {})
@@ -63,7 +79,11 @@ class ReadOnlyGraph:
             _result_key,
         )
 
-        result = self._graph.query(query, params=params)
+        # An explicit timeout is mandatory here: without it the query
+        # inherits the server's 1000ms default and large-graph paging dies.
+        result = self._graph.query(
+            query, params=params, timeout=self._query_timeout_ms
+        )
         keys = [_result_key(item) for item in result.header]
         return [
             {
@@ -188,6 +208,9 @@ def open_read_only_graph(
             f"unsupported graph provider '{backend}'; "
             "expected 'falkordb' or 'ladybug'"
         )
+    # Validate the timeout env before touching the network (mirrors the
+    # driver raising in its constructor).
+    query_timeout_ms = _read_query_timeout_ms()
     if uri:
         client = _falkordb_remote_client(uri, password, ssl)
     elif path:
@@ -198,7 +221,11 @@ def open_read_only_graph(
         raise ReadOnlyOpenError("falkordb backend requires path= or uri=")
     graph = client.select_graph(graph_name)
     return ReadOnlyGraph(
-        backend="falkordb", graph_name=graph_name, _client=client, _graph=graph
+        backend="falkordb",
+        graph_name=graph_name,
+        _client=client,
+        _graph=graph,
+        _query_timeout_ms=query_timeout_ms,
     )
 
 

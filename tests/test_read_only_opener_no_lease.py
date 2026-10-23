@@ -42,8 +42,12 @@ class _FakeResultSet:
 
 
 class _FakeGraph:
-    def query(self, query, params=None):
+    def query(self, query, params=None, timeout=None):
         assert "MATCH" in query
+        # the opener must carry the driver's read timeout — without it the
+        # query inherits the server's 1000ms default and large-graph paging
+        # dies with "Query timed out"
+        assert isinstance(timeout, int) and timeout > 0
         return _FakeResultSet()
 
 
