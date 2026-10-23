@@ -166,18 +166,6 @@ def _run(graph: Any, query: str, **params: Any) -> List[Dict[str, Any]]:
 _READ_WINDOW_MIN_IDS = 256
 
 
-def _lex_gt(id_exprs: List[str]) -> str:
-    """Cypher predicate: tuple (e1, e2, …) is strictly past $k1, $k2, …."""
-    clauses = []
-    for i in range(1, len(id_exprs) + 1):
-        eqs = " AND ".join(
-            f"{expr} = $k{j}" for j, expr in enumerate(id_exprs[: i - 1], start=1)
-        )
-        gt = f"{id_exprs[i - 1]} > $k{i}"
-        clauses.append(f"({eqs} AND {gt})" if eqs else gt)
-    return " OR ".join(clauses) if len(clauses) > 1 else clauses[0]
-
-
 def _row_id_tuple(row: Dict[str, Any]) -> List[Any]:
     return [
         value for key, value in row.items()
@@ -189,6 +177,7 @@ def _paged_rows(
     graph: Any,
     *,
     match_cypher: str,
+    group_cypher: str,
     count_cypher: str,
     range_cypher: str,
     id_exprs: List[str],
@@ -200,19 +189,20 @@ def _paged_rows(
 
     The server's ``resultset_size`` caps a single query's result set
     (FalkorDB default 10000, silent) — paging keeps every page under it.
-    Pages are scoped to a window of ``id_exprs[0]`` (width targets ~one
-    batch of rows) with an exact lexicographic cursor inside dense
-    windows. A growing ``SKIP`` instead re-ran the full traversal + sort
-    on every page — deep pages cost O(offset), quadratic overall, and
-    what blew the server's query timeout on large graphs. Windows keep
-    each page's work proportional to the batch. Invariant: rows read ==
-    the server's count; a shortfall is a loud warning, never a silent
-    cut (a silent doc-side cut would be destructive — missing paragraphs
-    stale their own links).
+    Pages are scoped to a window of ``id_exprs[0]`` (``$wlo``/``$whi``,
+    width targets ~one batch of rows); when a page ends inside the
+    boundary anchor's group, ``group_cypher`` resumes that group past
+    ``$after``. Both predicates are AND-only so FalkorDB pushes them to
+    the anchor scan — the previous pager's shapes forced full-graph work
+    per page (growing ``SKIP`` re-ran the whole traversal + sort;
+    an ``OR``-shaped cursor referencing ``id(e)`` defeated filter
+    pushdown: ~6x slower measured) and blew the server's query timeout.
+    Bounds are parameterized so each shape compiles one server plan per
+    read. Invariant: rows read == the server's count; a shortfall is a
+    loud warning, never a silent cut (a silent doc-side cut would be
+    destructive — missing paragraphs stale their own links).
 
-    ``match_cypher`` must carry a ``{scope}`` placeholder inside its WHERE
-    clause; the pager inlines engine-controlled ints there (no injection
-    surface). Rows without ``_*_id`` columns degrade to a single-page read.
+    Rows without ``_*_id`` columns degrade to a single-page read.
     """
     expected_rows = _run(graph, count_cypher, pid=pid)
     expected = expected_rows[0].get("c") if expected_rows else None
@@ -229,43 +219,53 @@ def _paged_rows(
     order = ", ".join(id_exprs)
     rows: List[Dict[str, Any]] = []
     seen_ids: set = set()
+
+    def absorb(page: List[Dict[str, Any]]) -> None:
+        for row in page:
+            node_id = tuple(_row_id_tuple(row))
+            if node_id:
+                if node_id in seen_ids:
+                    continue
+                seen_ids.add(node_id)
+            rows.append(row)
+
     window_lo = lo
     while window_lo < hi:
-        # expected == 0 must still read one page: an unreadable-but-empty
-        # label only surfaces through the page query failing (F3).
         if expected and len(rows) >= expected:
             break
         window_hi = min(window_lo + width, hi)
-        cursor: List[Any] = []
+        page_lo, after = window_lo, None
         while True:
-            scope = (
-                f" AND {id_exprs[0]} >= {window_lo} AND {id_exprs[0]} < {window_hi}"
-            )
-            params: Dict[str, Any] = {"pid": pid}
-            if cursor:
-                scope += " AND " + _lex_gt(id_exprs)
-                params.update({f"k{i}": v for i, v in enumerate(cursor, start=1)})
-            page = _run(
-                graph,
-                f"{match_cypher.format(scope=scope)} ORDER BY {order} "
-                f"LIMIT {int(batch)}",
-                **params,
-            )
+            if after is None:
+                page = _run(
+                    graph,
+                    f"{match_cypher} ORDER BY {order} LIMIT {int(batch)}",
+                    pid=pid, wlo=page_lo, whi=window_hi,
+                )
+            else:
+                page = _run(
+                    graph,
+                    f"{group_cypher} ORDER BY {order} LIMIT {int(batch)}",
+                    pid=pid, wlo=page_lo, after=after,
+                )
             if not page:
+                if after is None:
+                    break  # window drained
+                page_lo, after = page_lo + 1, None  # group drained
+                if page_lo >= window_hi:
+                    break
+                continue
+            absorb(page)
+            if expected and len(rows) >= expected:
                 break
-            for row in page:
-                node_id = tuple(_row_id_tuple(row))
-                if node_id:
-                    if node_id in seen_ids:
-                        continue
-                    seen_ids.add(node_id)
-                rows.append(row)
-            if expected is not None and len(rows) >= expected:
-                break
-            nxt = _row_id_tuple(page[-1])
-            if not nxt or nxt == cursor:
-                break  # rows carry no id columns to cursor on, or no progress
-            cursor = nxt
+            ids = _row_id_tuple(page[-1])
+            if not ids:
+                break  # rows carry no id columns to page on
+            anchor = ids[0]
+            if anchor > page_lo:
+                page_lo, after = anchor, None  # jump to the boundary group
+                continue
+            after = ids[-1]  # page ended inside this group; resume past it
         window_lo = window_hi
     if expected is not None and len(rows) < expected:
         print(
@@ -283,7 +283,15 @@ def read_doc_paragraphs(doc_graph: Any, project_id_normalized: str) -> List[Para
         doc_graph,
         match_cypher=(
             "MATCH (p:Paragraph) "
-            "WHERE p.project_id_normalized = $pid{scope} "
+            "WHERE p.project_id_normalized = $pid "
+            "AND id(p) >= $wlo AND id(p) < $whi "
+            "RETURN id(p) AS _node_id, p.source_id AS source_id, "
+            "p.paragraph_id AS paragraph_id, p.text AS text"
+        ),
+        group_cypher=(
+            "MATCH (p:Paragraph) "
+            "WHERE p.project_id_normalized = $pid "
+            "AND id(p) = $wlo AND id(p) > $after "
             "RETURN id(p) AS _node_id, p.source_id AS source_id, "
             "p.paragraph_id AS paragraph_id, p.text AS text"
         ),
@@ -325,7 +333,16 @@ def read_doc_entity_names(
         doc_graph,
         match_cypher=(
             "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
-            "WHERE p.project_id_normalized = $pid{scope} "
+            "WHERE p.project_id_normalized = $pid "
+            "AND id(p) >= $wlo AND id(p) < $whi "
+            "RETURN id(p) AS _node_id, id(e) AS _entity_id, "
+            "p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
+            "e.name AS name"
+        ),
+        group_cypher=(
+            "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
+            "WHERE p.project_id_normalized = $pid "
+            "AND id(p) = $wlo AND id(e) > $after "
             "RETURN id(p) AS _node_id, id(e) AS _entity_id, "
             "p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
             "e.name AS name"
@@ -397,7 +414,17 @@ def _read_labeled_symbols_paged(
         graph,
         match_cypher=(
             f"MATCH (n:{label}) "
-            "WHERE n.project_id_normalized = $pid{scope} "
+            "WHERE n.project_id_normalized = $pid "
+            "AND id(n) >= $wlo AND id(n) < $whi "
+            "RETURN id(n) AS _node_id, n.name AS name, "
+            "n.qualified_name AS qualified_name, "
+            f"n.{path_property} AS file_path, n.start_line AS start_line, "
+            "n.end_line AS end_line, n.language AS language, n.repo AS repo"
+        ),
+        group_cypher=(
+            f"MATCH (n:{label}) "
+            "WHERE n.project_id_normalized = $pid "
+            "AND id(n) = $wlo AND id(n) > $after "
             "RETURN id(n) AS _node_id, n.name AS name, "
             "n.qualified_name AS qualified_name, "
             f"n.{path_property} AS file_path, n.start_line AS start_line, "
