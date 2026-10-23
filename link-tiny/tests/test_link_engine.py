@@ -487,10 +487,10 @@ def _int_after(query: str, keyword: str) -> int:
 class PagedStubGraph:
     """Fake graph with per-label stores, count() and a resultset cap.
 
-    Emulates the engine's internal-id window paging contract: page queries
-    scope rows to ``id(...) >= lo AND id(...) < hi`` (plus an optional
-    lexicographic cursor ``$k1``/``$k2`` in dense windows), ordered by the
-    id tuple.
+    Emulates the engine's id-window paging contract: a window query scopes
+    rows to ``$wlo <= id(anchor) < $whi``, a group-resume query (``after``
+    param) re-reads one anchor's rows past ``id(last) > $after``, both
+    ordered by the id tuple.
 
     ``cap`` simulates the server's ``resultset_size`` (FalkorDB default
     10000): every ``run()`` response is truncated to at most ``cap`` rows,
@@ -523,7 +523,7 @@ class PagedStubGraph:
     def _synthesize_internal_ids(self):
         """Real servers always answer ``id()``; fixtures omit the columns.
 
-        Assign positional ids so the window/cursor pager exercises the same
+        Assign positional ids so the window/resume pager exercises the same
         contract it sees live (anchor ``_node_id``, edge ``_entity_id``).
         """
         p_ids = {
@@ -566,25 +566,24 @@ class PagedStubGraph:
 
     def _page(self, rows, keys, query, params):
         rows = list(rows)
-        lo = _int_after(query, ">=")
-        hi = _int_after(query, "<")
         limit = _int_after(query, "LIMIT") or len(rows)
-        cursor = tuple(
-            params[f"k{i}"] for i in range(1, 3) if f"k{i}" in params
-        )
 
         def id_key(row):
             return tuple(row[k] for k in keys if k in row)
 
-        scoped = sorted(
-            (
+        if "after" in params:
+            scoped = [
                 row for row in rows
-                if lo <= row[keys[0]] < hi
-                and (not cursor or id_key(row) > cursor)
+                if row[keys[0]] == params["wlo"] and row[keys[-1]] > params["after"]
                 and (self.cut_after is None or row[keys[0]] < self.cut_after)
-            ),
-            key=id_key,
-        )
+            ]
+        else:
+            scoped = [
+                row for row in rows
+                if params["wlo"] <= row[keys[0]] < params["whi"]
+                and (self.cut_after is None or row[keys[0]] < self.cut_after)
+            ]
+        scoped.sort(key=id_key)
         page = scoped[:limit]
         if self.cap is not None:
             page = page[:self.cap]
