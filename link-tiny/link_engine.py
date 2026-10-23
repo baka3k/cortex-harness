@@ -22,13 +22,17 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import normalizers
 import link_store
 from normalizers import CodeSymbolRef
+
+ProgressFn = Callable[[str], None]
+_NOOP_PROGRESS: ProgressFn = lambda msg: None
 
 
 # Symbol labels carrying the core identity columns (name/file_path/lines).
@@ -493,6 +497,7 @@ def read_code_symbols_report(
     project_id_normalized: str,
     parser_type: Optional[str] = None,
     batch: int = SYMBOL_READ_BATCH,
+    progress: ProgressFn = _NOOP_PROGRESS,
 ) -> Tuple[List[EngineSymbol], Dict[str, Dict[str, int]]]:
     """Read every symbol + endpoint label with per-label read accounting.
 
@@ -502,35 +507,31 @@ def read_code_symbols_report(
     """
     symbols: List[EngineSymbol] = []
     by_label: Dict[str, Dict[str, int]] = {}
-    for label in CODE_SYMBOL_LABELS:
+    all_labels = [
+        (label, "symbol") for label in CODE_SYMBOL_LABELS
+    ] + [
+        (label, "endpoint") for label in CODE_ENDPOINT_LABELS
+    ]
+    total_labels = len(all_labels)
+    for idx, (label, target_type) in enumerate(all_labels, 1):
+        t0 = time.monotonic()
         try:
             label_symbols, stats = _read_labeled_symbols_paged(
-                code_graph, label, project_id_normalized, parser_type or "", "symbol", batch
+                code_graph, label, project_id_normalized, parser_type or "", target_type, batch
             )
         except Exception as exc:  # noqa: BLE001 - per-label degradation
             print(
                 f"[link-engine] warning: label {label} unreadable ({exc})",
                 file=sys.stderr,
             )
-            # stay visible in the universe accounting — never vanish
             by_label[label] = {"rows_read": 0, "expected": 0, "kept": 0, "error": 1}
+            progress(f"  [{idx}/{total_labels}] {label}: ERROR ({exc})")
             continue
+        elapsed = time.monotonic() - t0
         symbols.extend(label_symbols)
         by_label[label] = stats
-    for label in CODE_ENDPOINT_LABELS:
-        try:
-            label_symbols, stats = _read_labeled_symbols_paged(
-                code_graph, label, project_id_normalized, parser_type or "", "endpoint", batch
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[link-engine] warning: endpoint label {label} unreadable ({exc})",
-                file=sys.stderr,
-            )
-            by_label[label] = {"rows_read": 0, "expected": 0, "kept": 0, "error": 1}
-            continue
-        symbols.extend(label_symbols)
-        by_label[label] = stats
+        kept = stats.get("kept", len(label_symbols))
+        progress(f"  [{idx}/{total_labels}] {label}: {kept} symbols ({elapsed:.1f}s)")
     return symbols, by_label
 
 
@@ -966,44 +967,72 @@ def build_links(
     reconcile: bool = False,
     dry_run: bool = False,
     code_folder_shas: Optional[Mapping[str, Mapping[str, str]]] = None,
+    progress: ProgressFn = _NOOP_PROGRESS,
 ) -> BuildReport:
     """Run the full pipeline for one project.
 
-    Steps: (1) delta vs ``state.json``; (2) candidate generation from the
-    doc graph against the code symbol index; (3) score/provenance stamp;
-    (4) stale propagation (append-only); (5) write records + state.
+    Complexity per step (n = data size, bounded by graph/file contents):
 
-    ``code_folder_shas`` is the repo-aware baseline
-    ({resolved folder → {folder_rel → sha}}, see
-    :func:`load_code_folder_inventories`); ``code_shas`` stays as the flat
-    fallback. SHAs join per LINK_CONTRACT.md §1.5.
+    * Step 1 — graph reads: O(P + E + S) where P=paragraphs, E=entity
+      edges, S=symbols.  Doc reads run in parallel (2 threads).  Code
+      reads iterate 14 labels sequentially (shared connection).
+    * Step 2 — matching: O(P·T·M) with M bounded (exact-name, typically
+      1–5 matches/token) → effectively O(total_tokens) = O(n).
+    * Step 3 — SHA join: O(S) dict lookups, one per unique identity.
+    * Step 4 — stale propagation: O(L) single pass over cached records
+      (no re-read of links.jsonl).
+    * Step 5 — write + coverage: O(F + L) where F=fresh pairs.
 
     ``dry_run`` computes everything and writes nothing.
     """
+    t_pipeline = time.monotonic()
     links_dir = Path(links_dir)
     doc_index = build_doc_sha_index(doc_shas)
     code_index = CodeShaIndex(code_folder_shas or {}, code_shas)
+    pid = _norm(project_id)
 
-    # Step 1 — delta inputs from the graphs + baselines.
-    paragraphs = read_doc_paragraphs(doc_graph, _norm(project_id))
-    entity_mentions = read_doc_entity_names(doc_graph, _norm(project_id))
-    symbols, symbol_stats = read_code_symbols_report(
-        code_graph, _norm(project_id), parser_type
+    # ── Step 1/6: Read graph data ────────────────────────────────────────
+    # Doc reads are independent → parallel (2 threads, same read-only graph).
+    # Code reads: 14 labels × (count + range + paged) → sequential per label.
+    progress("[step 1/6] Reading graph data...")
+    t1 = time.monotonic()
+
+    paragraphs: List[ParagraphRef] = []
+    entity_mentions: Dict[tuple, List[str]] = {}
+
+    try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_paras = pool.submit(read_doc_paragraphs, doc_graph, pid)
+            fut_entities = pool.submit(read_doc_entity_names, doc_graph, pid)
+            paragraphs = fut_paras.result()
+            entity_mentions = fut_entities.result()
+    except Exception:
+        paragraphs = read_doc_paragraphs(doc_graph, pid)
+        entity_mentions = read_doc_entity_names(doc_graph, pid)
+
+    progress(
+        f"[step 1/6]   doc paragraphs: {len(paragraphs)}  "
+        f"entity mentions: {len(entity_mentions)}  "
+        f"({time.monotonic() - t1:.1f}s)"
     )
+
+    t1b = time.monotonic()
+    symbols, symbol_stats = read_code_symbols_report(
+        code_graph, pid, parser_type, progress=progress,
+    )
+    progress(
+        f"[step 1/6]   code symbols: {len(symbols)}  "
+        f"({time.monotonic() - t1b:.1f}s)"
+    )
+    progress(f"[step 1/6] Reading graph data done ({time.monotonic() - t1:.1f}s)")
+
     paragraph_anchors = {paragraph.anchor for paragraph in paragraphs}
     symbol_identities = {symbol.identity for symbol in symbols}
-    # server-side universe: Σ per-label counts (== Σ kept on clean reads;
-    # a gap means truncation/dead labels and is visible per label)
     symbol_universe_expected = sum(
         int(stats.get("expected") or 0) for stats in symbol_stats.values()
     )
 
-    # Destructive-read guard: only the CODE reads swallow per-label
-    # failures into an empty set — a graph read that collapses to zero
-    # symbols must never stale-mark a non-empty link set (pagination
-    # dialect failure, wrong store, dead label set). Doc reads either
-    # raise (build fails loudly) or a genuine doc wipe should stale.
-    # Reconcile states operator intent and bypasses the guard.
     if not reconcile and not dry_run and not symbols:
         prior_state = link_store.load_state(links_dir) or {}
         prior_active = ((prior_state.get("counts") or {}).get("active")) or 0
@@ -1015,18 +1044,29 @@ def build_links(
                 "or use --reconcile to force"
             )
 
-    # One join per identity, resolved once and shared by the write and
-    # drift paths — duplicate graph identities (same path/name/lines in
-    # two scan folders) must not get different SHAs on the two paths.
+    # ── Step 2/6: SHA join (O(S), one dict lookup per unique identity) ───
+    progress("[step 2/6] Building SHA join index...")
+    t2 = time.monotonic()
     code_join_by_identity: Dict[tuple, Tuple[Optional[str], str]] = {}
     for symbol in symbols:
         if symbol.identity not in code_join_by_identity:
             code_join_by_identity[symbol.identity] = code_index.resolve(
                 symbol.repo, symbol.path
             )
+    progress(
+        f"[step 2/6] SHA join: {len(code_join_by_identity)} unique identities "
+        f"({time.monotonic() - t2:.1f}s)"
+    )
 
-    # Steps 2–3 — fresh candidate pairs with shas joined in.
+    # ── Step 3/6: Match paragraphs × symbols (O(P·T·M) ≈ O(n)) ─────────
+    progress("[step 3/6] Matching paragraphs × symbols (exact-name)...")
+    t3 = time.monotonic()
     fresh_pairs = compute_fresh_pairs(paragraphs, entity_mentions, symbols)
+    progress(
+        f"[step 3/6] Matching: {len(fresh_pairs)} pairs "
+        f"({time.monotonic() - t3:.1f}s)"
+    )
+
     sha_join = _empty_sha_join()
     fresh_records: List[Dict[str, Any]] = []
     for paragraph, symbol in fresh_pairs:
@@ -1049,11 +1089,17 @@ def build_links(
             )
         )
 
-    # Existing state: latest record per key drives the skip / stale rules.
+    # ── Step 4/6: Load existing links + stale propagation (O(L)) ─────────
+    progress("[step 4/6] Loading existing links...")
+    t4 = time.monotonic()
     existing = link_store.load_links(links_dir)
     latest: Dict[tuple, Dict[str, Any]] = {}
     for record in existing:
         latest[link_store.record_key(record)] = record
+    progress(
+        f"[step 4/6] Existing links: {len(existing)} records "
+        f"({time.monotonic() - t4:.1f}s)"
+    )
 
     def _sha_changed(record: Mapping[str, Any]) -> bool:
         doc_sha = _doc_sha_for(
@@ -1062,7 +1108,6 @@ def build_links(
         previous_doc_sha = (record.get("doc") or {}).get("source_sha")
         if doc_sha and previous_doc_sha and doc_sha != previous_doc_sha:
             return True
-        # same join result the write path used (first-wins per identity)
         code_sha, _outcome = code_join_by_identity.get(
             _code_identity_of(record), (None, JOIN_MISSING)
         )
@@ -1071,28 +1116,33 @@ def build_links(
             return True
         return False
 
-    # Step 4a — stale propagation for drifted/deleted sides (append-only).
     def _drifted(record: Mapping[str, Any]) -> bool:
         if _code_identity_of(record) not in symbol_identities:
-            return True  # code deleted or renamed — no auto re-match here
+            return True
         doc = record.get("doc") or {}
         anchor = (str(doc.get("doc_id") or ""), doc.get("paragraph_id"))
         if anchor not in paragraph_anchors:
-            return True  # doc or paragraph deleted — no re-match
+            return True
         return _sha_changed(record)
 
+    progress("[step 4/6] Stale propagation...")
+    t4b = time.monotonic()
     staled: List[Dict[str, Any]] = []
     if not dry_run:
         if reconcile:
-            # Full rebuild: supersede every existing active record, then
-            # re-append the authoritative fresh set below.
-            staled = link_store.mark_stale(links_dir, lambda record: True)
+            staled = link_store.mark_stale(
+                links_dir, lambda record: True, _loaded_records=existing,
+            )
         else:
-            staled = link_store.mark_stale(links_dir, _drifted)
+            staled = link_store.mark_stale(
+                links_dir, _drifted, _loaded_records=existing,
+            )
+    progress(
+        f"[step 4/6] Stale: {len(staled)} staled  "
+        f"({time.monotonic() - t4b:.1f}s)"
+    )
 
-    # New records: skip pairs whose latest record is active with identical
-    # SHAs (delta no-op); anything else re-appends as active. Reconcile
-    # bypasses the skip so the fresh set is written authoritatively.
+    # ── Step 5/6: Delta filter + write new records ───────────────────────
     new_records: List[Dict[str, Any]] = []
     for record in fresh_records:
         previous = latest.get(link_store.record_key(record))
@@ -1106,9 +1156,15 @@ def build_links(
             continue
         new_records.append(record)
 
-    # Step 5 — write (records, then state snapshot with coverage).
+    progress(f"[step 5/6] Writing {len(new_records)} new links...")
+    t5 = time.monotonic()
     if not dry_run and new_records:
         link_store.append_links(links_dir, new_records)
+    progress(f"[step 5/6] Write done ({time.monotonic() - t5:.1f}s)")
+
+    # ── Step 6/6: Coverage + state ───────────────────────────────────────
+    progress("[step 6/6] Computing coverage + saving state...")
+    t6 = time.monotonic()
 
     # Canonical projection: latest record per key across existing lines,
     # appended stale copies and the fresh set.
@@ -1137,6 +1193,13 @@ def build_links(
                 "symbol_universe_expected": symbol_universe_expected,
             },
         )
+    total_elapsed = time.monotonic() - t_pipeline
+    progress(
+        f"[step 6/6] Coverage: {coverage['active_links']} active, "
+        f"{coverage['stale_links']} stale  "
+        f"({time.monotonic() - t6:.1f}s)"
+    )
+    progress(f"─── done in {total_elapsed:.1f}s ───")
 
     return BuildReport(
         project_id=project_id,

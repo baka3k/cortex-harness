@@ -3963,6 +3963,35 @@ def _link_process_scope(project_path: Path, *, enabled: bool):
         handle.close()
 
 
+def _echo_link_summary(summary: dict) -> None:
+    """Print a formatted sync-link summary from the worker JSON output."""
+    cov = summary.get("coverage") or {}
+    elapsed = summary.get("elapsed", 0)
+    doc_cov = cov.get("doc_coverage")
+    sym_cov = cov.get("symbol_coverage")
+    prov = cov.get("provenance_distribution") or {}
+
+    click.echo("")
+    click.echo(f"{'═' * 52}")
+    click.echo(f"  Sync Link Summary  ({elapsed:.1f}s)")
+    click.echo(f"{'─' * 52}")
+    click.echo(f"  project   : {summary.get('project_id', '?')}")
+    click.echo(f"  provider  : {summary.get('provider', '?')}")
+    click.echo(f"  new links : {summary.get('new_links', 0)}")
+    click.echo(f"  staled    : {summary.get('staled_links', 0)}")
+    click.echo(f"  unchanged : {summary.get('unchanged_links', 0)}")
+    click.echo(f"  active    : {cov.get('active_links', 0)}")
+    click.echo(f"  stale     : {cov.get('stale_links', 0)}")
+    if doc_cov is not None:
+        click.echo(f"  doc cov   : {doc_cov:.1%}")
+    if sym_cov is not None:
+        click.echo(f"  symbol cov: {sym_cov:.1%}")
+    if prov:
+        click.echo(f"  provenance: {', '.join(f'{k}={v}' for k, v in prov.items())}")
+    click.echo(f"  links_dir : {summary.get('links_dir', '?')}")
+    click.echo(f"{'═' * 52}")
+
+
 def _run_link_sync(options: dict) -> None:
     """Spawn the link worker for the active (or requested) project."""
     project_path = Path(options["project_dir"]).resolve()
@@ -3996,7 +4025,9 @@ def _run_link_sync(options: dict) -> None:
         click.echo(f"[dry-run] {' '.join(cmd)}")
 
     with _link_process_scope(project_path, enabled=not options.get("dry_run")):
-        result = subprocess.run(cmd, env=env)
+        result = subprocess.run(
+            cmd, env=env, stdout=subprocess.PIPE, stderr=None,
+        )
     if result.returncode == 2:
         raise click.ClickException(
             "link sync failed: invalid input (see worker output above)"
@@ -4005,6 +4036,15 @@ def _run_link_sync(options: dict) -> None:
         raise click.ClickException(
             f"link sync failed with exit code {result.returncode}"
         )
+
+    # Parse JSON summary from worker stdout and print formatted output.
+    stdout_text = (getattr(result, "stdout", None) or b"").decode("utf-8", errors="replace").strip()
+    if stdout_text:
+        try:
+            summary = json.loads(stdout_text.splitlines()[-1])
+            _echo_link_summary(summary)
+        except (json.JSONDecodeError, KeyError):
+            click.echo(stdout_text)
 
 
 @sync.group("link", invoke_without_command=True)

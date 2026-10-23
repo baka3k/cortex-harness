@@ -228,15 +228,20 @@ def load_links(
 def mark_stale(
     project_dir: Path,
     predicate: Callable[[Mapping[str, Any]], bool],
+    *,
+    _loaded_records: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """Append stale copies of active records matching ``predicate``.
 
     Existing lines are never touched (append-only invariant). Idempotent:
     a record whose latest state is already stale is not re-appended.
     Returns the stale copies written.
+
+    ``_loaded_records`` accepts pre-loaded records to avoid re-reading
+    ``links.jsonl`` when the caller already has them (O(n) not O(2n)).
     """
     project_dir = Path(project_dir)
-    records = load_links(project_dir)
+    records = _loaded_records if _loaded_records is not None else load_links(project_dir)
     latest: Dict[tuple, Dict[str, Any]] = {}
     for record in records:
         latest[record_key(record)] = record

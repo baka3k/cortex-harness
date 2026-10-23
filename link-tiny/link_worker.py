@@ -23,6 +23,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -122,6 +123,11 @@ def _load_config_mapping(config_path: Path | None) -> dict:
     return fallback
 
 
+def _progress(msg: str) -> None:
+    """Print progress to stderr (stdout reserved for JSON summary)."""
+    print(msg, file=sys.stderr, flush=True)
+
+
 def build_project(
     project_id: str,
     *,
@@ -129,12 +135,17 @@ def build_project(
     config_dir: Path | None = None,
     dry_run: bool = False,
     reconcile: bool = False,
+    progress: callable = _progress,
 ) -> dict:
     """Open both graphs read-only and run the pipeline for one project."""
+    t_total = time.monotonic()
     # dev.py passes the config FILE; the registry wants its directory.
     registry_config_dir = (
         config_dir.parent if (config_dir is not None and config_dir.is_file()) else config_dir
     )
+    progress(f"[info] project={project_id}  dir={project_dir}")
+    progress(f"[info] reconcile={reconcile}  dry_run={dry_run}")
+
     targets = registry_facade.resolve_project_targets(
         project_id, config_dir=registry_config_dir
     )
@@ -148,6 +159,9 @@ def build_project(
     code_endpoint = _graph_endpoint(resolved, role="code", provider=targets.provider)
     doc_endpoint = _graph_endpoint(resolved, role="document", provider=targets.provider)
 
+    progress(f"[info] provider={targets.provider}  parser={targets.parser_type}")
+
+    t_prep = time.monotonic()
     merged_hashes = link_engine.load_sync_state_hashes(project_dir)
     baseline_doc_shas, fallback_code_shas = link_engine.split_shas_by_side(merged_hashes)
     config_path = config_dir
@@ -163,14 +177,21 @@ def build_project(
     )
     if not code_shas:
         code_shas = fallback_code_shas
+    progress(
+        f"[prep] SHA baselines: {len(baseline_doc_shas)} doc, "
+        f"{len(code_shas)} code  ({time.monotonic() - t_prep:.1f}s)"
+    )
 
     links_dir = registry_facade.links_dir(targets.project_id, project_dir=project_dir)
+
+    t_open = time.monotonic()
     code_graph = open_read_only_graph(
         backend=targets.provider, graph_name=targets.code_graph, **code_endpoint
     )
     doc_graph = open_read_only_graph(
         backend=targets.provider, graph_name=targets.doc_graph, **doc_endpoint
     )
+    progress(f"[prep] Graphs opened ({time.monotonic() - t_open:.1f}s)")
     try:
         report = link_engine.build_links(
             project_id=targets.project_id,
@@ -183,11 +204,13 @@ def build_project(
             reconcile=reconcile,
             dry_run=dry_run,
             code_folder_shas=code_folder_shas,
+            progress=progress,
         )
     finally:
         code_graph.close()
         doc_graph.close()
 
+    total_elapsed = time.monotonic() - t_total
     return {
         "project_id": targets.project_id,
         "provider": targets.provider,
@@ -203,6 +226,7 @@ def build_project(
         "sha_join": report.sha_join,
         "links_dir": str(links_dir),
         "coverage": report.coverage,
+        "elapsed": round(total_elapsed, 1),
         "would_link": (
             [
                 {
