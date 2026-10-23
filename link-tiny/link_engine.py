@@ -161,57 +161,112 @@ def _run(graph: Any, query: str, **params: Any) -> List[Dict[str, Any]]:
     return list(graph.run(query, params) or [])
 
 
+# Window paging floor: never emit a zero/negative-width id window even on
+# degenerate count/bounds ratios.
+_READ_WINDOW_MIN_IDS = 256
+
+
+def _lex_gt(id_exprs: List[str]) -> str:
+    """Cypher predicate: tuple (e1, e2, …) is strictly past $k1, $k2, …."""
+    clauses = []
+    for i in range(1, len(id_exprs) + 1):
+        eqs = " AND ".join(
+            f"{expr} = $k{j}" for j, expr in enumerate(id_exprs[: i - 1], start=1)
+        )
+        gt = f"{id_exprs[i - 1]} > $k{i}"
+        clauses.append(f"({eqs} AND {gt})" if eqs else gt)
+    return " OR ".join(clauses) if len(clauses) > 1 else clauses[0]
+
+
+def _row_id_tuple(row: Dict[str, Any]) -> List[Any]:
+    return [
+        value for key, value in row.items()
+        if key.startswith("_") and key.endswith("_id")
+    ]
+
+
 def _paged_rows(
     graph: Any,
     *,
     match_cypher: str,
     count_cypher: str,
-    order_by: str,
+    range_cypher: str,
+    id_exprs: List[str],
     pid: str,
     batch: int,
     what: str,
 ) -> List[Dict[str, Any]]:
-    """All rows of one match, keyset-paged by ``id()``.
+    """All rows of one match, paged over the anchor's internal-id space.
 
     The server's ``resultset_size`` caps a single query's result set
     (FalkorDB default 10000, silent) — paging keeps every page under it.
-    Invariant: rows read == the server's count; a shortfall is a loud
-    warning, never a silent cut (a silent doc-side cut would be
-    destructive — missing paragraphs stale their own links).
+    Pages are scoped to a window of ``id_exprs[0]`` (width targets ~one
+    batch of rows) with an exact lexicographic cursor inside dense
+    windows. A growing ``SKIP`` instead re-ran the full traversal + sort
+    on every page — deep pages cost O(offset), quadratic overall, and
+    what blew the server's query timeout on large graphs. Windows keep
+    each page's work proportional to the batch. Invariant: rows read ==
+    the server's count; a shortfall is a loud warning, never a silent
+    cut (a silent doc-side cut would be destructive — missing paragraphs
+    stale their own links).
+
+    ``match_cypher`` must carry a ``{scope}`` placeholder inside its WHERE
+    clause; the pager inlines engine-controlled ints there (no injection
+    surface). Rows without ``_*_id`` columns degrade to a single-page read.
     """
     expected_rows = _run(graph, count_cypher, pid=pid)
     expected = expected_rows[0].get("c") if expected_rows else None
     expected = int(expected) if expected is not None else None
+    bounds = _run(graph, range_cypher, pid=pid)
+    lo_bound = bounds[0].get("lo") if bounds else None
+    hi_bound = bounds[0].get("hi") if bounds else None
+    lo = int(lo_bound) if lo_bound is not None else 0
+    hi = int(hi_bound) + 1 if hi_bound is not None else 1 << 62
+    width = max(
+        _READ_WINDOW_MIN_IDS,
+        (int(batch) * (hi - lo)) // max(expected or 1, 1),
+    )
+    order = ", ".join(id_exprs)
     rows: List[Dict[str, Any]] = []
     seen_ids: set = set()
-    offset = 0
-    while True:
-        page = _run(
-            graph,
-            f"{match_cypher} ORDER BY {order_by} "
-            f"SKIP {int(offset)} LIMIT {int(batch)}",
-            pid=pid,
-        )
-        if not page:
+    window_lo = lo
+    while window_lo < hi:
+        # expected == 0 must still read one page: an unreadable-but-empty
+        # label only surfaces through the page query failing (F3).
+        if expected and len(rows) >= expected:
             break
-        for row in page:
-            # dedup key: every internal id column (a paragraph row has one
-            # node id; an edge row needs the (p, e) pair to stay distinct)
-            node_id = tuple(
-                value for key, value in row.items()
-                if key.startswith("_") and key.endswith("_id")
+        window_hi = min(window_lo + width, hi)
+        cursor: List[Any] = []
+        while True:
+            scope = (
+                f" AND {id_exprs[0]} >= {window_lo} AND {id_exprs[0]} < {window_hi}"
             )
-            if node_id:
-                if node_id in seen_ids:
-                    continue
-                seen_ids.add(node_id)
-            rows.append(row)
-        rows_read = len(rows)
-        if expected is not None and rows_read >= expected:
-            break
-        if expected is None and len(page) < batch:
-            break
-        offset += len(page)
+            params: Dict[str, Any] = {"pid": pid}
+            if cursor:
+                scope += " AND " + _lex_gt(id_exprs)
+                params.update({f"k{i}": v for i, v in enumerate(cursor, start=1)})
+            page = _run(
+                graph,
+                f"{match_cypher.format(scope=scope)} ORDER BY {order} "
+                f"LIMIT {int(batch)}",
+                **params,
+            )
+            if not page:
+                break
+            for row in page:
+                node_id = tuple(_row_id_tuple(row))
+                if node_id:
+                    if node_id in seen_ids:
+                        continue
+                    seen_ids.add(node_id)
+                rows.append(row)
+            if expected is not None and len(rows) >= expected:
+                break
+            nxt = _row_id_tuple(page[-1])
+            if not nxt or nxt == cursor:
+                break  # rows carry no id columns to cursor on, or no progress
+            cursor = nxt
+        window_lo = window_hi
     if expected is not None and len(rows) < expected:
         print(
             f"[link-engine] warning: {what} truncated — read {len(rows)} "
@@ -228,7 +283,7 @@ def read_doc_paragraphs(doc_graph: Any, project_id_normalized: str) -> List[Para
         doc_graph,
         match_cypher=(
             "MATCH (p:Paragraph) "
-            "WHERE p.project_id_normalized = $pid "
+            "WHERE p.project_id_normalized = $pid{scope} "
             "RETURN id(p) AS _node_id, p.source_id AS source_id, "
             "p.paragraph_id AS paragraph_id, p.text AS text"
         ),
@@ -237,7 +292,12 @@ def read_doc_paragraphs(doc_graph: Any, project_id_normalized: str) -> List[Para
             "WHERE p.project_id_normalized = $pid "
             "RETURN count(p) AS c"
         ),
-        order_by="id(p)",
+        range_cypher=(
+            "MATCH (p:Paragraph) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN min(id(p)) AS lo, max(id(p)) AS hi"
+        ),
+        id_exprs=["id(p)"],
         pid=project_id_normalized,
         batch=SYMBOL_READ_BATCH,
         what="Paragraph",
@@ -265,7 +325,7 @@ def read_doc_entity_names(
         doc_graph,
         match_cypher=(
             "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
-            "WHERE p.project_id_normalized = $pid "
+            "WHERE p.project_id_normalized = $pid{scope} "
             "RETURN id(p) AS _node_id, id(e) AS _entity_id, "
             "p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
             "e.name AS name"
@@ -275,7 +335,12 @@ def read_doc_entity_names(
             "WHERE p.project_id_normalized = $pid "
             "RETURN count(*) AS c"
         ),
-        order_by="id(p), id(e)",
+        range_cypher=(
+            "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
+            "WHERE p.project_id_normalized = $pid "
+            "RETURN min(id(p)) AS lo, max(id(p)) AS hi"
+        ),
+        id_exprs=["id(p)", "id(e)"],
         pid=project_id_normalized,
         batch=SYMBOL_READ_BATCH,
         what="HAS_ENTITY edges",
@@ -315,76 +380,68 @@ def _read_labeled_symbols_paged(
     target_type: str,
     batch: int,
 ) -> Tuple[List[EngineSymbol], Dict[str, int]]:
-    """Read one label in deterministic keyset batches.
+    """Read one label in internal-id window batches.
 
     Invariant (plan 261019-1700 Phase 03): rows read == the server's count
     for the label, regardless of the server's ``resultset_size`` — the
     server caps each query's RESULT SET (observed: FalkorDB default
-    10000, silently truncating an unpaginated read), but SKIP/LIMIT pages
-    stay under it. A shortfall vs the count is a loud warning, never a
-    silent cut. ``ORDER BY id(n)`` keeps paging deterministic; ids dedup
-    across batch boundaries.
+    10000, silently truncating an unpaginated read), and paging keeps
+    every page under it. A shortfall vs the count is a loud warning,
+    never a silent cut. Paging shares :func:`_paged_rows` so label reads
+    cost pages proportional to rows, not the quadratic-growing SKIP the
+    pager replaced.
     """
     path_property = "source_file" if target_type == "endpoint" else "file_path"
     expected = _label_server_count(graph, label, project_id_normalized)
-    symbols: List[EngineSymbol] = []
-    seen_ids: set = set()
-    rows_read = 0
-    offset = 0
-    while True:
-        # SKIP/LIMIT carry engine-controlled ints (no injection surface).
-        # They are inlined — not parameterized — because parameter support
-        # in pagination clauses varies by backend; the query shape is
-        # verified live on FalkorDB. On a backend that rejects it, the
-        # per-label degradation warning plus the destructive-read guard in
-        # build_links surface the failure loudly instead of stale-marking.
-        rows = _run(
-            graph,
+    rows = _paged_rows(
+        graph,
+        match_cypher=(
             f"MATCH (n:{label}) "
-            "WHERE n.project_id_normalized = $pid "
+            "WHERE n.project_id_normalized = $pid{scope} "
             "RETURN id(n) AS _node_id, n.name AS name, "
             "n.qualified_name AS qualified_name, "
             f"n.{path_property} AS file_path, n.start_line AS start_line, "
-            "n.end_line AS end_line, n.language AS language, n.repo AS repo "
-            f"ORDER BY id(n) SKIP {int(offset)} LIMIT {int(batch)}",
-            pid=project_id_normalized,
-        )
-        if not rows:
-            break
-        for row in rows:
-            node_id = row.get("_node_id")
-            if node_id is not None:
-                if node_id in seen_ids:
-                    continue  # overlap across batch boundaries
-                seen_ids.add(node_id)
-            name = str(row.get("name") or "").strip()
-            path = link_store.posix_path(row.get("file_path"))
-            if not name or not path:
-                continue
-            symbols.append(
-                EngineSymbol(
-                    name=name,
-                    path=path,
-                    qualified_name=str(row.get("qualified_name") or ""),
-                    start_line=row.get("start_line"),
-                    end_line=row.get("end_line"),
-                    language=str(row.get("language") or ""),
-                    target_type=target_type,
-                    parser_type=parser_type or "",
-                    repo=str(row.get("repo") or ""),
-                )
+            "n.end_line AS end_line, n.language AS language, n.repo AS repo"
+        ),
+        count_cypher=(
+            f"MATCH (n:{label}) "
+            "WHERE n.project_id_normalized = $pid "
+            "RETURN count(n) AS c"
+        ),
+        range_cypher=(
+            f"MATCH (n:{label}) "
+            "WHERE n.project_id_normalized = $pid "
+            "RETURN min(id(n)) AS lo, max(id(n)) AS hi"
+        ),
+        id_exprs=["id(n)"],
+        pid=project_id_normalized,
+        batch=batch,
+        what=f"label {label}",
+    )
+    symbols: List[EngineSymbol] = []
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        path = link_store.posix_path(row.get("file_path"))
+        if not name or not path:
+            continue
+        symbols.append(
+            EngineSymbol(
+                name=name,
+                path=path,
+                qualified_name=str(row.get("qualified_name") or ""),
+                start_line=row.get("start_line"),
+                end_line=row.get("end_line"),
+                language=str(row.get("language") or ""),
+                target_type=target_type,
+                parser_type=parser_type or "",
+                repo=str(row.get("repo") or ""),
             )
-        rows_read += len(rows)
-        if expected is not None and rows_read >= expected:
-            break
-        if expected is None and len(rows) < batch:
-            break
-        offset += len(rows)
-    stats = {"rows_read": rows_read, "expected": expected or 0, "kept": len(symbols)}
-    if expected is not None and rows_read < expected:
+        )
+    stats = {"rows_read": len(rows), "expected": expected or 0, "kept": len(symbols)}
+    if expected is not None and len(rows) < expected:
         print(
             f"[link-engine] warning: label {label} truncated — read "
-            f"{rows_read} of {expected} rows (server resultset cap?); "
+            f"{len(rows)} of {expected} rows (server resultset cap?); "
             "these symbols are MISSING from the match index",
             file=sys.stderr,
         )
