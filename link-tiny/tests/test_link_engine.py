@@ -61,14 +61,17 @@ class StubGraph:
         return []  # every other label is empty in fixtures
 
 
-def _symbol_row(name, path, qualified_name="", start=10, end=20, target="file_path"):
-    return {
+def _symbol_row(name, path, qualified_name="", start=10, end=20, target="file_path", nid=None):
+    row = {
         "name": name,
         "qualified_name": qualified_name,
         "file_path": path,
         "start_line": start,
         "end_line": end,
     }
+    if nid is not None:
+        row["_node_id"] = nid
+    return row
 
 
 def _paragraph(doc_id, paragraph_id, text):
@@ -484,11 +487,16 @@ def _int_after(query: str, keyword: str) -> int:
 class PagedStubGraph:
     """Fake graph with per-label stores, count() and a resultset cap.
 
+    Emulates the engine's internal-id window paging contract: page queries
+    scope rows to ``id(...) >= lo AND id(...) < hi`` (plus an optional
+    lexicographic cursor ``$k1``/``$k2`` in dense windows), ordered by the
+    id tuple.
+
     ``cap`` simulates the server's ``resultset_size`` (FalkorDB default
     10000): every ``run()`` response is truncated to at most ``cap`` rows,
     exactly how the live incident lost symbols beyond the cut.
-    ``cut_after`` models a server that serves nothing beyond that SKIP
-    offset (the shortfall case — a loud warning must fire).
+    ``cut_after`` models a server that serves nothing at or beyond that
+    anchor id (the shortfall case — a loud warning must fire).
     ``fail_labels`` makes page queries raise for those labels (unreadable
     label → per-label degradation that must stay visible in accounting).
     """
@@ -510,24 +518,81 @@ class PagedStubGraph:
         self.cut_after = cut_after
         self.count_override = count_override or {}
         self.fail_labels = fail_labels or set()
+        self._synthesize_internal_ids()
+
+    def _synthesize_internal_ids(self):
+        """Real servers always answer ``id()``; fixtures omit the columns.
+
+        Assign positional ids so the window/cursor pager exercises the same
+        contract it sees live (anchor ``_node_id``, edge ``_entity_id``).
+        """
+        p_ids = {
+            (p.get("source_id"), p.get("paragraph_id")): i
+            for i, p in enumerate(self.paragraphs)
+        }
+        for i, p in enumerate(self.paragraphs):
+            p.setdefault("_node_id", i)
+        next_anchor = len(self.paragraphs)
+        for j, m in enumerate(self.entity_mentions):
+            anchor = (m.get("source_id"), m.get("paragraph_id"))
+            if anchor not in p_ids:
+                p_ids[anchor] = next_anchor
+                next_anchor += 1
+            m.setdefault("_node_id", p_ids[anchor])
+            m.setdefault("_entity_id", j)
+        for rows in self.labels.values():
+            for i, row in enumerate(rows):
+                row.setdefault("_node_id", i)
 
     @staticmethod
     def _label_of(query):
         match = _re.search(r"MATCH \(n:(\w+)\)", query)
         return match.group(1) if match else None
 
-    def _page(self, rows, query):
+    def _store_of(self, query):
+        if "HAS_ENTITY" in query:
+            return self.entity_mentions, ("_node_id", "_entity_id")
+        if "Paragraph" in query:
+            return self.paragraphs, ("_node_id",)
+        label = self._label_of(query)
+        return self.labels.get(label, []), ("_node_id",)
+
+    def _bounds(self, query):
+        rows, keys = self._store_of(query)
+        if not rows:
+            return [{"lo": None, "hi": None}]
+        ids = [row[keys[0]] for row in rows]
+        return [{"lo": min(ids), "hi": max(ids)}]
+
+    def _page(self, rows, keys, query, params):
         rows = list(rows)
-        skip = _int_after(query, "SKIP")
+        lo = _int_after(query, ">=")
+        hi = _int_after(query, "<")
         limit = _int_after(query, "LIMIT") or len(rows)
-        page = rows[skip:skip + limit]
-        if self.cut_after is not None and skip >= self.cut_after:
-            page = []
+        cursor = tuple(
+            params[f"k{i}"] for i in range(1, 3) if f"k{i}" in params
+        )
+
+        def id_key(row):
+            return tuple(row[k] for k in keys if k in row)
+
+        scoped = sorted(
+            (
+                row for row in rows
+                if lo <= row[keys[0]] < hi
+                and (not cursor or id_key(row) > cursor)
+                and (self.cut_after is None or row[keys[0]] < self.cut_after)
+            ),
+            key=id_key,
+        )
+        page = scoped[:limit]
         if self.cap is not None:
             page = page[:self.cap]
         return [dict(row) for row in page]
 
     def run(self, query, params=None):
+        params = params or {}
+        rows, keys = self._store_of(query)
         if "count(" in query:
             if "HAS_ENTITY" in query:
                 return [{"c": len(self.entity_mentions)}]
@@ -537,18 +602,16 @@ class PagedStubGraph:
             if label in self.count_override:
                 return [{"c": self.count_override[label]}]
             return [{"c": len(self.labels.get(label, []))}]
+        if "min(id(" in query:
+            return self._bounds(query)
         if self._label_of(query) in self.fail_labels:
             raise RuntimeError(f"label store broken: {self._label_of(query)}")
-        if "HAS_ENTITY" in query:
-            return self._page(self.entity_mentions, query)
-        if "Paragraph" in query:
-            return self._page(self.paragraphs, query)
-        return self._page(self.labels.get(self._label_of(query), []), query)
+        return self._page(rows, keys, query, params)
 
 
 def _function_rows(count, name_prefix="fn"):
     return [
-        _symbol_row(f"{name_prefix}_{i:02d}", f"src/mod{i % 3}/file{i}.py")
+        _symbol_row(f"{name_prefix}_{i:02d}", f"src/mod{i % 3}/file{i}.py", nid=i)
         for i in range(count)
     ]
 
