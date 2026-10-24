@@ -37,3 +37,9 @@ pipeline tree parallel to `code-tiny/` and `doc-tiny/`.
 9. **No fuzzy matching in Phase 1.** Provenance is `exact-name` only;
    semantic matching is gated on the coverage telemetry in `state.json`
    (see `docs/LINK_CONTRACT.md`).
+10. **Zero real-project identifiers in tests, comments, plans, or logs.**
+    Never copy real screen/module IDs, symbol/control/column names, or
+    document filenames from live graphs into `link-tiny/tests/`, code
+    comments, `docs/plans/`, or `docs/logs/`. Always use generic synthetic
+    fixtures (`OrderSummaryForm`, `grid_unit_col`, `specs/order_form_spec.xlsx`).
+    See `AGENTS.md` and `docs/SENSITIVE_TERMS_POLICY.md`.

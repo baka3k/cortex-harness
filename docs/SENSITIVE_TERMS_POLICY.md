@@ -8,13 +8,21 @@
 
 ## Quy tắc
 
-1. **Không bao giờ commit** term nhạy cảm dưới mọi dạng (đủ mọi vị trí:
-   nội dung file, comment, tên biến/fixture, đường dẫn mẫu, commit
-   message, dữ liệu testdata).
-2. Khi cần nhắc tới deployment/dự án trong tài liệu hoặc test, dùng chữ
-   trung tính: "the live project", "the deployment", "<project>",
-   `<code-folder>`; fixture test dùng term giả (`sample`, `project-x`) —
-   **không** dùng term thật kèm `# sensitive-guard:allow`.
+1. **Không bao giờ commit** term nhạy cảm hoặc bất kỳ keyword/identifier
+   nào của dự án thật dưới mọi dạng (đủ mọi vị trí: nội dung file, comment,
+   tên biến/fixture trong unit test, đường dẫn mẫu, tên tài liệu/màn hình/
+   module/symbol/control lấy từ live DB, `docs/plans/`, `docs/logs/`,
+   commit message, dữ liệu testdata).
+2. **Quy tắc bắt buộc cho mọi AI Agent & Harness (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`)**:
+   - Khi debug hoặc kiểm thử trên dữ liệu thật trong Qdrant / FalkorDB /
+     LadybugDB, Agent **tuyệt đối không được copy nguyên văn** tên file,
+     đường dẫn, tên màn hình/chức năng, tên biến/control/hàm, hay tiêu đề
+     tài liệu của dự án thật vào unit test (`tests/`), comment, plan
+     (`docs/plans/`), hay session log (`docs/logs/`).
+   - Bắt buộc đổi toàn bộ ví dụ/fixture sang định danh giả lập trung tính
+     (ví dụ: `project-x`, `fixt`, `src/orders/OrderSummaryForm.vb`,
+     `grid_unit_col`, `specs/order_form_spec.xlsx`, "the live project",
+     "the deployment") — **không** dùng term thật kèm `# sensitive-guard:allow`.
 3. `.sensitive-terms` là file **local-only** (đã gitignore). Không commit
    nó, không xoá nó — nó là nguồn của hook chặn commit. Nếu clone máy mới
    mà thiếu file này, tạo lại theo mẫu ở dưới và điền term thật.
