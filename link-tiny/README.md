@@ -80,10 +80,10 @@ stale-propagate.
 | Module | Role |
 | --- | --- |
 | `registry_facade.py` | `project_id` → graph/collection/provider targets + the instance `links/` directory. Delegates to `code-tiny/tools/common/project_registry.py`. |
-| `normalizers.py` | Pure matching logic: casefold, qualified-name segments, identifier-token extraction, exact-name candidate matching. |
-| `link_store.py` | The only writer. Append-only `links.jsonl` + `state.json` snapshot + stale propagation + coverage stats. |
-| `link_engine.py` | 5-step pipeline (delta → candidates → score → stale → write). Opens both graphs read-only, no lease. Knows nothing about MCP or CLI. |
-| `mcp_server.py` | `link_mcp` on :8790. Read-only facade: `find_code_for_doc`, `find_doc_for_code`, `trace_status`. Envelope v2. Never imports the engine. |
+| `normalizers.py` | Pure matching logic: casefold, qualified-name segments, identifier-token extraction, entity-token hygiene, exact-name candidate matching. |
+| `link_store.py` | The only writer. Co-located SQLite WAL `links.db` + append-only `links.jsonl` + `state.json` snapshot + multi-resolution query waterfalls + stale propagation + coverage stats. |
+| `link_engine.py` | Pipeline (delta → 2-stage graph read → SHA join → IDF/affinity-gated matching → stale → write). Opens both graphs read-only, no lease. Knows nothing about MCP or CLI. |
+| `mcp_server.py` | `link_mcp` on :8790. Read-only SQLite-indexed facade: `find_code_for_doc`, `find_doc_for_code`, `trace_status`. Envelope v2. Never imports the engine. |
 
 Full contract (record schema, identity rules, isolation, Phase-3 gate):
 `docs/LINK_CONTRACT.md`.

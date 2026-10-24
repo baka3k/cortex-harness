@@ -7,6 +7,7 @@ scope: "link-tiny/link_engine.py precision defects (doc/code sha join, paginated
 blockedBy: []
 blocks: []
 relatedPlans:
+  - 261024-1305-link-doc-code-v2-redesign (follow-up v2 redesign: fixes extensionless doc_sha misses, endpoint projection drops, and replaces 8.4 GB JSONL with indexed SQLite store)
   - 261019-1126-link-tiny-doc-code-traceability (parent feature — this repairs its Phase-3 engine delta/match steps; link store, CLI, and MCP phases are untouched)
   - 260718-2159-incremental-scan-reliability (owns the sync-state / inventory baseline formats this plan reads)
 prediction: after one reconcile — symbol_universe rises from 28992 to the full per-label server counts (~100k+ on the live project), active links grow well past 2002 (unit-col family pairings alone add ≥8), ≥95% of records carry non-null source_sha on both sides

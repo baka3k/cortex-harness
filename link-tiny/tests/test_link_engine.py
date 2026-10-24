@@ -852,3 +852,76 @@ def test_doc_reads_are_paginated_too(tmp_path):
     mentions_map = engine.read_doc_entity_names(doc, "fixt")
     total = sum(len(v) for v in mentions_map.values())
     assert total == 3  # every edge row, deduped by (paragraph, entity)
+
+
+# ---------------------------------------------------------------------------
+# v2 improvements: IDF/co-occurrence gate, endpoint file_path, doc_sha NFC/NFD
+# ---------------------------------------------------------------------------
+
+
+def test_idf_and_cooccurrence_gate_blocks_unscoped_high_df_noise(tmp_path):
+    """High-DF symbols (> MAX_UNSCOPED_SYMBOL_DF files) require file-context affinity."""
+    links_dir = tmp_path / "fixt"
+    # 'on_submit_click' appears in 12 distinct files (high DF > 8)
+    high_df_symbols = [
+        _symbol_row("on_submit_click", f"src/mod/screen_{i:02d}.vb")
+        for i in range(12)
+    ]
+    # 'order_screen_03_save' is a unique (DF=1) symbol in screen_03.vb
+    unique_sym = _symbol_row("order_screen_03_save", "src/mod/screen_03.vb")
+
+    doc = StubGraph(
+        paragraphs=[
+            # Paragraph 1: mentions only on_submit_click with no file affinity -> gated out
+            _paragraph("docs/general_notes.md", 1, "Pressing on_submit_click closes the form."),
+            # Paragraph 2: mentions on_submit_click alongside order_screen_03_save -> links screen_03.vb's on_submit_click
+            _paragraph(
+                "docs/general_notes.md",
+                2,
+                "In this screen, order_screen_03_save runs before on_submit_click.",
+            ),
+            # Paragraph 3: doc_id itself names screen_05 -> links screen_05.vb's on_submit_click
+            _paragraph("docs/screen_05_spec.md", 1, "on_submit_click exits screen_05."),
+        ]
+    )
+    code = StubGraph(symbols=high_df_symbols + [unique_sym])
+    _build(links_dir, code=code, doc=doc, doc_shas={}, code_shas={})
+    records = store.latest_links(links_dir, status="active")
+
+    # Paragraph 1 produced 0 links
+    assert [r for r in records if r["doc"]["doc_id"] == "docs/general_notes.md" and r["doc"]["paragraph_id"] == 1] == []
+
+    # Paragraph 2 linked order_screen_03_save (score 1.0) and ONLY screen_03.vb's on_submit_click
+    p2_links = [r for r in records if r["doc"]["doc_id"] == "docs/general_notes.md" and r["doc"]["paragraph_id"] == 2]
+    assert {(r["code"]["path"], r["code"]["name"]) for r in p2_links} == {
+        ("src/mod/screen_03.vb", "order_screen_03_save"),
+        ("src/mod/screen_03.vb", "on_submit_click"),
+    }
+
+    # Paragraph 3 linked ONLY screen_05.vb's on_submit_click via doc_id stem affinity
+    p3_links = [r for r in records if r["doc"]["doc_id"] == "docs/screen_05_spec.md"]
+    assert [(r["code"]["path"], r["code"]["name"]) for r in p3_links] == [
+        ("src/mod/screen_05.vb", "on_submit_click")
+    ]
+
+
+def test_doc_sha_unicode_nfd_nfc_and_extensionless_flattened(tmp_path):
+    """macOS NFD paths and extensionless flattened doc_ids resolve to exact SHA."""
+    import unicodedata
+
+    doc_dir = tmp_path / "docs_root"
+    sub = doc_dir / unicodedata.normalize("NFD", "café_docs")
+    sub.mkdir(parents=True)
+    xlsx = sub / unicodedata.normalize("NFD", "résumé_spec.xlsx")
+    xlsx.write_bytes(b"excel-payload")
+
+    shas = engine.load_doc_folder_hashes([str(doc_dir)])
+    assert len(shas) == 1
+    index = engine.build_doc_sha_index(shas)
+
+    # Graph source_id in NFC and without .xlsx extension
+    nfc_no_ext = unicodedata.normalize("NFC", "café_docs__résumé_spec")
+    resolved = engine._doc_sha_for(nfc_no_ext, index)
+    assert resolved is not None
+    assert len(resolved) == 64
+

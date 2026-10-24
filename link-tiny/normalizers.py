@@ -1,19 +1,19 @@
-"""Identifier normalization and exact-name candidate matching.
+"""Identifier normalization, token hygiene, and candidate matching.
 
 Pure functions only — no I/O, no graph access, no MCP. Both the engine
-(candidate generation) and tests consume this module.
+(candidate generation + IDF/affinity scoring) and tests consume this module.
 
-Matching semantics (Phase 1: exact-name only):
+Matching semantics:
 
 * A *match key* is the tuple of lowercased words of an identifier after
   splitting snake_case / camelCase / dotted / kebab forms. ``login_handler``,
   ``loginHandler`` and ``login.handler`` share the key ``("login","handler")``.
 * A doc token matches a code symbol when its key equals the symbol's short
   name key or the key of any qualified-name segment suffix (last segment
-  first). Every match scores ``1.0`` with provenance ``exact-name`` —
-  ranking only orders output deterministically, it never ranks by fuzziness.
-* Stoplist tokens (common verbs, language keywords, very short tokens)
-  produce no candidates on either side — ambiguity explosion guard (RT-5).
+  first).
+* Stoplist tokens (common verbs, language keywords, UI/framework boilerplate,
+  very short tokens) produce no candidates on either side — ambiguity
+  explosion guard (RT-5).
 """
 
 from __future__ import annotations
@@ -29,10 +29,12 @@ EXACT_NAME_SCORE = 1.0
 # Tokens at or below this length (after normalization) are noise.
 MIN_TOKEN_LENGTH = 4
 
-# Common verbs and language keywords that match hundreds of symbols and
-# carry no traceability signal. Compared lowercased; whole words only.
+# Common verbs, language keywords, and UI/framework boilerplate single words
+# that match hundreds of symbols and carry no traceability signal. Compared
+# lowercased; whole words only (a compound identifier like ``login_handler``
+# or ``DEPT_CODE`` stays linkable because at least one word is not in STOPWORDS).
 STOPWORDS = frozenset({
-    # generic verbs
+    # generic verbs & nouns
     "init", "setup", "run", "handle", "main", "exec", "execute", "process",
     "start", "stop", "load", "save", "open", "close", "read", "write",
     "parse", "build", "make", "check", "create", "update", "delete",
@@ -43,6 +45,20 @@ STOPWORDS = frozenset({
     "data", "info", "item", "items", "value", "values", "name", "type",
     "kind", "node", "nodes", "list", "dict", "map", "set", "entry",
     "result", "results", "output", "input", "param", "params", "args",
+    # UI / framework / prose single-word boilerplate (v2 explosion guard)
+    "source", "code", "screen", "components", "component", "confirm",
+    "dispose", "disposing", "sender", "eventargs", "eventsender", "event",
+    "initializecomponent", "initialize", "suspendlayout", "resumelayout",
+    "performlayout", "suspend", "resume", "perform", "layout",
+    "container", "resources", "defaultinstance", "system", "status",
+    "header", "detail", "button", "label", "panel", "column", "record",
+    "table", "master", "search", "target", "option", "number", "amount",
+    "format", "length", "message", "action", "method", "object", "module",
+    "window", "dialog", "report", "folder", "client", "index", "count",
+    "total", "error", "errors", "clear", "focus", "enabled", "visible",
+    "active", "change", "dummy", "select", "order", "insert", "group",
+    "left", "right", "inner", "outer", "join", "where", "having", "distinct",
+    "into", "step", "only", "begin", "max", "min", "spread",
     # language keywords / literals
     "self", "this", "none", "null", "nil", "true", "false", "void", "int",
     "str", "string", "bool", "float", "double", "long", "char", "byte",
@@ -150,6 +166,30 @@ def is_linkable_token(value: Optional[str]) -> bool:
     return True
 
 
+def is_linkable_entity_token(value: Optional[str]) -> bool:
+    """True when a doc-graph Entity name is identifier-shaped and linkable.
+
+    Entity extractors (YAKE/GLiNER) emit natural-language phrases and plain
+    dictionary words alongside real code identifiers. An entity mention must
+    pass :func:`is_linkable_token`, contain no whitespace, and carry at least
+    one identifier cue (``_``, ``.``, ``/``, ``-``, digits, or inner capital
+    letters / all-caps acronym).
+    """
+    raw = str(value or "").strip()
+    if not raw or any(ch.isspace() for ch in raw):
+        return False
+    if not is_linkable_token(raw):
+        return False
+    if any(sep in raw for sep in ("_", ".", "/", "-")):
+        return True
+    if any(ch.isdigit() for ch in raw):
+        return True
+    # camelCase, PascalCase with inner capital, or ALLCAPS acronym (e.g. ADODB)
+    if any(ch.isupper() for ch in raw[1:]):
+        return True
+    return False
+
+
 def extract_identifier_tokens(text: Optional[str]) -> List[str]:
     """Extract identifier-like tokens from prose, positional order, deduped.
 
@@ -214,34 +254,25 @@ class CodeSymbolRef:
 
 
 def symbol_match_keys(symbol: CodeSymbolRef) -> List[Tuple[str, ...]]:
-    """All keys a symbol can be matched on: short name + segment suffixes.
-
-    Module-path segments of a qualified name are excluded from keying
-    (``a``/``b`` in ``a.b.C`` are not identifiers agents reference); only
-    the trailing identifier-bearing segments contribute. In practice the
-    short name key and the last qualified segment key cover exact-name
-    matching; the full-path key guards dotted references in prose.
-    """
+    """All keys a symbol can be matched on: short name + segment suffixes."""
     keys: List[Tuple[str, ...]] = []
+    seen_keys: set[Tuple[str, ...]] = set()
     short = token_match_key(symbol.name)
     if short:
         keys.append(short)
+        seen_keys.add(short)
     for segment in qualified_segments(symbol.qualified_name):
         segment_key = token_match_key(segment)
-        if segment_key and segment_key != short:
+        if segment_key and segment_key not in seen_keys:
             keys.append(segment_key)
+            seen_keys.add(segment_key)
     return keys
 
 
 def build_match_index(
     code_symbols: Iterable[CodeSymbolRef],
 ) -> Dict[Tuple[str, ...], List[CodeSymbolRef]]:
-    """Precompute ``match key → symbols`` for batch candidate lookups.
-
-    Equivalent to calling :func:`match_candidates` per token, but O(1) per
-    token instead of O(symbols): full-corpus builds (thousands of paragraphs
-    × thousands of symbols) need the index, not the linear scan.
-    """
+    """Precompute ``match key → symbols`` for batch candidate lookups."""
     index: Dict[Tuple[str, ...], List[CodeSymbolRef]] = {}
     seen: set[Tuple[str, ...]] = set()
     for symbol in code_symbols:
@@ -258,13 +289,7 @@ def match_candidates(
     doc_token: Optional[str],
     code_symbols: Iterable[CodeSymbolRef],
 ) -> List[Tuple[CodeSymbolRef, float, str]]:
-    """Return ranked ``(symbol, score, provenance)`` pairs for a doc token.
-
-    Exact-name only: every returned pair scores ``1.0`` with provenance
-    ``exact-name``. Same name in N symbols yields N pairs — never
-    auto-select (plan risk R5). Stoplisted/unlinkable tokens yield ``[]``.
-    Batch builds should use :func:`build_match_index` + :func:`match_index_lookup`.
-    """
+    """Return ranked ``(symbol, score, provenance)`` pairs for a doc token."""
     return match_index_lookup(build_match_index(code_symbols), doc_token)
 
 
@@ -291,6 +316,7 @@ __all__ = [
     "build_match_index",
     "casefold_name",
     "extract_identifier_tokens",
+    "is_linkable_entity_token",
     "is_linkable_token",
     "match_candidates",
     "match_index_lookup",

@@ -10,7 +10,8 @@ contract future plans cite when they touch link data.
 
 ```
 {instance_root}/links/{project_id}/
-├── links.jsonl   # append-only link records
+├── links.db      # SQLite WAL indexed store (docs, paragraphs, symbols, links)
+├── links.jsonl   # append-only link records (compacted automatically on oversized --reconcile)
 └── state.json    # SHA snapshot (doc+code), counts, coverage telemetry
 ```
 
@@ -38,13 +39,19 @@ never modified by link-tiny.
 
 Rules:
 
-- **Append-only.** Records are never rewritten or removed in place. Drift
-  appends a copy with `status: "stale"` + `staled_at`; deletes are logical.
-  The canonical read view is *latest record per (doc ref, code ref)* —
-  `link_store.latest_links`.
+- **Append-only + SQLite WAL indexed.** Records are appended to `links.jsonl`
+  and upserted into the co-located `links.db` SQLite WAL database in the same
+  lock scope. Drift appends a copy with `status: "stale"` + `staled_at`;
+  deletes are logical. The canonical read view is *latest record per
+  (doc ref, code ref)* — `link_store.latest_links` (and B-Tree indexed
+  `links.db` tables `docs`, `paragraphs`, `symbols`, `links` for `< 10ms`
+  MCP queries).
 - **Provenance + score are mandatory** (validated at the store boundary).
-  Phase-1 provenance is always `"exact-name"` with `score 1.0`; no other
-  values exist yet.
+  Provenance is `"exact-name"` with `score = 1.0` for low-DF symbols
+  (`file_df <= 2`) and IDF-weighted `(0, 1.0]` with file-affinity bonus for
+  higher-DF symbols (`file_df > 2`). High-DF symbols (`file_df > 8`) require
+  file-context co-occurrence affinity so generic UI/framework identifiers do
+  not cause combinatorial explosion.
 - **Identity is stable, never graph-internal.** Code side:
   `(path, name, start_line, end_line, parser_type, source_sha)`; doc side:
   `(doc_id, paragraph_id, source_sha)`. `_graph_id` never appears.

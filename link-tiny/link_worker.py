@@ -45,8 +45,8 @@ from tools.graph.read_only_opener import (  # noqa: E402
 )
 
 
-def _code_source_folders(config_path: Path | None) -> list[str]:
-    """Read code scan folders from the active config file (or directory)."""
+def _source_folders(config_path: Path | None, section: str) -> list[str]:
+    """Read scan folders for ``section`` ('code' or 'doc') from config."""
     if config_path is None:
         return []
     config_path = Path(config_path)
@@ -59,7 +59,7 @@ def _code_source_folders(config_path: Path | None) -> list[str]:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        source = (payload.get("code") or {}).get("source") or {}
+        source = (payload.get(section) or {}).get("source") or {}
         for project in source.get("projects") or []:
             folders.extend(str(folder) for folder in project.get("folder") or [])
         legacy = source.get("folder")
@@ -68,6 +68,16 @@ def _code_source_folders(config_path: Path | None) -> list[str]:
                 folder.strip() for folder in legacy.split(",") if folder.strip()
             )
     return [folder for folder in folders if folder]
+
+
+def _code_source_folders(config_path: Path | None) -> list[str]:
+    """Read code scan folders from the active config file (or directory)."""
+    return _source_folders(config_path, "code")
+
+
+def _doc_source_folders(config_path: Path | None) -> list[str]:
+    """Read doc scan folders from the active config file (or directory)."""
+    return _source_folders(config_path, "doc")
 
 
 def _graph_endpoint(
@@ -169,6 +179,11 @@ def build_project(
         env_config = os.environ.get("CORTEX_HARNESS_CONFIG_PATH")
         config_path = Path(env_config) if env_config else None
     code_folders = _code_source_folders(config_path)
+    doc_folders = _doc_source_folders(config_path)
+    if doc_folders:
+        baseline_doc_shas = link_engine.load_doc_folder_hashes(
+            doc_folders, existing=baseline_doc_shas
+        )
     code_shas = link_engine.load_code_inventory_hashes(
         code_folders, targets.project_id, project_dir
     )

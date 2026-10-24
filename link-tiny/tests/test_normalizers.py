@@ -127,6 +127,28 @@ def test_is_linkable_token(token, linkable):
     assert normalizers.is_linkable_token(token) is linkable
 
 
+@pytest.mark.parametrize(
+    "entity_name,linkable",
+    [
+        ("Source", False),
+        ("CODE", False),
+        ("Screen", False),
+        ("Dispose", False),
+        ("InitializeComponent", False),
+        ("Select", False),
+        ("plainword", False),
+        ("user login handler", False),
+        ("login_handler", True),
+        ("UserAuthService", True),
+        ("grid_unit_col", True),
+        ("ADODB", True),
+        ("/api/v1/users", True),
+    ],
+)
+def test_is_linkable_entity_token(entity_name, linkable):
+    assert normalizers.is_linkable_entity_token(entity_name) is linkable
+
+
 # ---------------------------------------------------------------------------
 # match_candidates — exact-name rule, ambiguity emits all (R5)
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ scope: "new link-tiny/ tree (registry facade, normalizers, link engine, link sto
 blockedBy: []
 blocks: []
 relatedPlans:
+  - 261024-1305-link-doc-code-v2-redesign (follow-up v2 redesign: replaces flat JSONL store with SQLite WAL, adds IDF/co-occurrence scoring, incremental extraction, and indexed MCP queries)
   - 261019-1700-link-record-sha-join (follow-up: repairs this plan's Phase-3 delta/SHA step — record source_sha joins missed both baseline namespaces)
   - 260728-0000-unified-ingest-query-contract (naming contract + ProjectRegistry — link-tiny reuses resolve_project_targets as the only join key)
   - 260828-1508-multi-instance-fanout-default (lease semantics — link engine opens both graphs read-only, no writer lease)

@@ -3,22 +3,17 @@
 
 Third MCP server, parallel to graph_mcp (:8788) and mind_mcp (:8789):
 
-* reads ``links.jsonl`` / ``state.json`` from the instance links directory
-  (cheap, local, no graph access, no leases);
-* delegates content retrieval over HTTP to mind_mcp/graph_mcp and degrades
-  gracefully when they are down (refs stay useful, snippets note
-  ``content unavailable``);
+* queries ``links.db`` (SQLite WAL with B-Tree indexes) and ``state.json``
+  from the instance links directory (sub-millisecond, local, no graph access,
+  no leases);
+* serves pre-redacted snippets stored in ``links.db`` at link-build time
+  (0 HTTP calls in the normal path) and falls back to mind_mcp over HTTP
+  when snippets are absent, degrading gracefully when mind_mcp is down;
 * emits the shared ``cortex.mcp.tool-result`` v2 envelope on every tool
   (single producer: ``cortex_harness.mcp_contract`` — no copied envelope
   code);
 * never writes link data and never imports the engine (isolation contract
   in ``CLAUDE.md``).
-
-Untrusted-content boundary (plan risk R2): tools return references + score
-+ provenance + short snippets only. Snippets pass the repository
-``.sensitive-terms`` filter (a link-tiny implementation — the file had no
-Python consumer before) before leaving the server; full document/paragraph
-content is fetched by the agent via mind_mcp tools.
 """
 
 from __future__ import annotations
@@ -64,8 +59,6 @@ MCP_NAME = os.getenv("MCP_SERVER_NAME", "link_mcp")
 DEFAULT_GRAPH_MCP_URL = "http://127.0.0.1:8788/mcp"
 DEFAULT_MIND_MCP_URL = "http://127.0.0.1:8789/mcp"
 SNIPPET_MAX_CHARS = 240
-# Server-side caps: top_k is clamped so one call cannot hammer the
-# upstreams, and snippet enrichment stops after this many results.
 MAX_TOP_K = 100
 SNIPPET_FETCH_BUDGET = 20
 STALE_HINT = "trace data stale — run 'dev sync link'"
@@ -83,12 +76,7 @@ def sensitive_terms_path() -> Path:
 
 
 def load_sensitive_terms(path: Optional[Path] = None) -> List[Tuple[str, bool]]:
-    """Parse the sensitive-terms file into ``(term, case_sensitive)`` pairs.
-
-    Syntax (mirrors sensitive-guard-cli): ``#`` comments, blank lines
-    ignored, ``case:`` prefix forces case-sensitive matching, ``*`` acts as
-    a wildcard.
-    """
+    """Parse the sensitive-terms file into ``(term, case_sensitive)`` pairs."""
     target = Path(path) if path else sensitive_terms_path()
     if not target.is_file():
         return []
@@ -108,14 +96,7 @@ def filter_sensitive_text(
     text: str,
     terms: Optional[List[Tuple[str, bool]]] = None,
 ) -> str:
-    """Replace sensitive-term occurrences in ``text`` with ``▮``.
-
-    Plain terms match whole words case-insensitively; ``case:`` terms are
-    case-sensitive; wildcard terms (``*``) match whole word tokens,
-    case-insensitively (matching the file's documented contract). Redaction
-    runs on the FULL text — callers must not truncate before filtering, or
-    a term straddling the boundary leaks its prefix.
-    """
+    """Replace sensitive-term occurrences in ``text`` with ``▮``."""
     if not text:
         return text
     if terms is None:
@@ -156,11 +137,7 @@ def upstream_urls() -> Tuple[str, str]:
 
 
 def call_upstream_tool(endpoint: str, tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Call one tool on an upstream MCP server; return the parsed envelope.
-
-    Raises :class:`UpstreamUnavailable` on any transport/protocol failure —
-    callers degrade instead of failing the tool.
-    """
+    """Call one tool on an upstream MCP server; return the parsed envelope."""
     try:
         import httpx
 
@@ -220,14 +197,7 @@ def call_upstream_tool(endpoint: str, tool: str, arguments: Dict[str, Any]) -> D
 def paragraph_snippet(
     project_id: str, doc_id: str, paragraph_id: Any
 ) -> Tuple[Optional[str], bool]:
-    """Fetch a filtered short snippet for one paragraph via mind_mcp.
-
-    Scoped by ``project_id``: without it mind_mcp fans out across every
-    registered project's doc graphs and same-key paragraphs from another
-    project could leak through. Returns ``(snippet_or_None, available)`` —
-    ``available=False`` when the upstream is unreachable (degrade, never
-    raise).
-    """
+    """Fetch a filtered short snippet for one paragraph via mind_mcp."""
     _graph_url, mind_url = upstream_urls()
     try:
         envelope = call_upstream_tool(
@@ -251,8 +221,6 @@ def paragraph_snippet(
         text = data
     if not text:
         return None, True
-    # Redact BEFORE truncating: a term straddling the cut would leak its
-    # prefix if we truncated first (R2 boundary).
     filtered = filter_sensitive_text(text)
     snippet = filtered[:SNIPPET_MAX_CHARS]
     if len(filtered) > SNIPPET_MAX_CHARS:
@@ -261,16 +229,30 @@ def paragraph_snippet(
 
 
 # ---------------------------------------------------------------------------
-# Read model
+# Fast Read Model (Indexed SQLite + state.json)
 # ---------------------------------------------------------------------------
 
 
-def _project_read_model(project_id: Any) -> Dict[str, Any]:
-    """Latest-per-key links + state + staleness verdict for one project."""
+def _project_metadata(project_id: Any) -> Dict[str, Any]:
+    """Resolve targets, links_dir, state.json, and staleness in <1 ms (never scans JSONL)."""
     targets = registry_facade.resolve_project_targets(project_id)
     links_dir = registry_facade.links_dir(targets.project_id)
-    links = link_store.latest_links(links_dir)
     state = link_store.load_state(links_dir)
+    state_counts = state.get("counts") if isinstance(state, Mapping) else None
+    state_path = links_dir / link_store.STATE_FILENAME
+    jsonl_path = links_dir / link_store.LINKS_FILENAME
+    if (
+        isinstance(state_counts, Mapping)
+        and state_path.is_file()
+        and (not jsonl_path.is_file() or state_path.stat().st_mtime >= jsonl_path.stat().st_mtime)
+    ):
+        counts: Optional[Dict[str, int]] = {
+            "active": int(state_counts.get("active") or 0),
+            "stale": int(state_counts.get("stale") or 0),
+            "total": int(state_counts.get("total") or 0),
+        }
+    else:
+        counts = link_store.query_status_counts(links_dir)
 
     stale_reason: Optional[str] = None
     if state is None:
@@ -287,23 +269,22 @@ def _project_read_model(project_id: Any) -> Dict[str, Any]:
                     stale_reason = STALE_HINT
             except ValueError:
                 stale_reason = STALE_HINT
+    has_any_links = bool(
+        (counts and counts.get("total", 0) > 0)
+        or (state and ((state.get("counts") or {}).get("total") or 0) > 0)
+    )
     return {
         "targets": targets,
-        "links": links,
+        "links_dir": links_dir,
         "state": state,
+        "counts": counts,
+        "has_any_links": has_any_links,
         "stale_reason": stale_reason,
     }
 
 
 def _newest_sync_state_mtime() -> Any:
-    """Newest mtime among the ACTIVE project root's sync-state files.
-
-    Scope note: the server resolves storage roots from the active harness
-    config (one project root per deployment, the same convention the code
-    and doc servers use). Projects registered under a different project
-    root get no staleness comparison here — trace_status still reports
-    their counts; only the mtime verdict is single-root scoped.
-    """
+    """Newest mtime among the ACTIVE project root's sync-state files."""
     project_root = registry_facade.project_root_from_config()
     state_dir = project_root / ".cortext-harness" / "sync-state"
     if not state_dir.is_dir():
@@ -369,36 +350,32 @@ def find_code_for_doc_impl(
     min_score: float = 0.0,
 ) -> Dict[str, Any]:
     """Ranked active code refs implementing a document (refs + snippets)."""
-    model = _project_read_model(project_id)
-    links = [
-        record
-        for record in model["links"]
-        if record.get("status") == link_store.STATUS_ACTIVE
-        and float(record.get("score") or 0.0) >= float(min_score)
-        and (not doc_id or (record.get("doc") or {}).get("doc_id") == doc_id)
-        and _match_query(record, query)
-    ]
-    links.sort(
-        key=lambda record: (
-            -float(record.get("score") or 0.0),
-            str((record.get("code") or {}).get("path") or ""),
-            str((record.get("code") or {}).get("name") or ""),
-        )
-    )
+    meta = _project_metadata(project_id)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
-    truncated = len(links) > top_k
-    links = links[:top_k]
+    queried = link_store.query_code_for_doc(
+        meta["links_dir"],
+        doc_id=doc_id,
+        query=query,
+        top_k=top_k,
+        min_score=min_score,
+    )
+    if queried is not None:
+        matched_items, total_matched = queried
+        truncated = total_matched > top_k
+    else:
+        matched_items = []
+        truncated = False
 
     results: List[Dict[str, Any]] = []
     content_available = True
-    # Snippet enrichment budget: each upstream fetch is a full MCP session;
-    # stop enriching past SNIPPET_FETCH_BUDGET results and return bare refs.
-    for index, record in enumerate(links):
+    for index, (record, local_snippet) in enumerate(matched_items):
         view = _result_view(record)
-        if index < SNIPPET_FETCH_BUDGET:
+        if local_snippet:
+            view["snippet"] = filter_sensitive_text(local_snippet)[:SNIPPET_MAX_CHARS]
+        elif index < SNIPPET_FETCH_BUDGET:
             doc = record.get("doc") or {}
             snippet, available = paragraph_snippet(
-                model["targets"].project_id,
+                meta["targets"].project_id,
                 str(doc.get("doc_id") or ""),
                 doc.get("paragraph_id"),
             )
@@ -408,12 +385,12 @@ def find_code_for_doc_impl(
         results.append(view)
 
     data: Dict[str, Any] = {
-        "project_id": model["targets"].project_id,
+        "project_id": meta["targets"].project_id,
         "results": results,
     }
     notes: List[str] = []
-    if model["stale_reason"]:
-        notes.append(model["stale_reason"])
+    if meta["stale_reason"]:
+        notes.append(meta["stale_reason"])
     if not content_available:
         notes.append("content unavailable")
     if truncated:
@@ -421,7 +398,7 @@ def find_code_for_doc_impl(
             f"results truncated to top_k={top_k}; narrow the query and retry"
         )
         data["truncation"] = {"truncated": True, "top_k": top_k}
-    if not model["links"]:
+    if not meta["has_any_links"] and NO_LINKS_HINT not in notes:
         notes.append(NO_LINKS_HINT)
     if notes:
         data["note"] = "; ".join(notes)
@@ -436,46 +413,45 @@ def find_doc_for_code_impl(
     min_score: float = 0.0,
 ) -> Dict[str, Any]:
     """Reverse lookup: documents linked to a code symbol identity."""
-    model = _project_read_model(project_id)
-    posix_path = link_store.posix_path(path) if path else None
-    name_key = token_match_key(name) if name else None
-    links = []
-    for record in model["links"]:
-        if record.get("status") != link_store.STATUS_ACTIVE:
-            continue
-        if float(record.get("score") or 0.0) < float(min_score):
-            continue
-        code = record.get("code") or {}
-        if posix_path and code.get("path") != posix_path:
-            continue
-        if name_key and token_match_key(code.get("name")) != name_key:
-            continue
-        if not posix_path and not name_key:
-            continue  # identity required: no unscoped dumps
-        links.append(record)
-    links.sort(
-        key=lambda record: (
-            -float(record.get("score") or 0.0),
-            str((record.get("doc") or {}).get("doc_id") or ""),
-        )
-    )
+    meta = _project_metadata(project_id)
     top_k = max(1, min(int(top_k), MAX_TOP_K))
-    truncated = len(links) > top_k
-    links = links[:top_k]
+    if not path and not name:
+        queried = ([], 0)
+    else:
+        queried = link_store.query_doc_for_code(
+            meta["links_dir"],
+            path=path,
+            name=name,
+            top_k=top_k,
+            min_score=min_score,
+        )
+    if queried is not None:
+        matched_items, total_matched = queried
+        truncated = total_matched > top_k
+    else:
+        matched_items = []
+        truncated = False
+
+    results: List[Dict[str, Any]] = []
+    for record, local_snippet in matched_items:
+        view = _result_view(record)
+        if local_snippet:
+            view["snippet"] = filter_sensitive_text(local_snippet)[:SNIPPET_MAX_CHARS]
+        results.append(view)
 
     data: Dict[str, Any] = {
-        "project_id": model["targets"].project_id,
-        "results": [_result_view(record) for record in links],
+        "project_id": meta["targets"].project_id,
+        "results": results,
     }
     notes: List[str] = []
-    if model["stale_reason"]:
-        notes.append(model["stale_reason"])
+    if meta["stale_reason"]:
+        notes.append(meta["stale_reason"])
     if truncated:
         notes.append(
             f"results truncated to top_k={top_k}; narrow the query and retry"
         )
         data["truncation"] = {"truncated": True, "top_k": top_k}
-    if not model["links"]:
+    if not meta["has_any_links"] and NO_LINKS_HINT not in notes:
         notes.append(NO_LINKS_HINT)
     if notes:
         data["note"] = "; ".join(notes)
@@ -484,26 +460,29 @@ def find_doc_for_code_impl(
 
 def trace_status_impl(project_id: Optional[str] = None) -> Dict[str, Any]:
     """State snapshot: built_at, counts, coverage, stale verdict."""
-    model = _project_read_model(project_id)
-    state = model["state"] or {}
+    meta = _project_metadata(project_id)
+    state = meta["state"] or {}
+    db_counts = meta["counts"] or {}
+    state_counts = state.get("counts")
+    stale_links = int(
+        db_counts.get("stale")
+        if db_counts
+        else ((state_counts or {}).get("stale") or 0)
+    )
     data: Dict[str, Any] = {
-        "project_id": model["targets"].project_id,
+        "project_id": meta["targets"].project_id,
         "built_at": state.get("built_at"),
-        "counts": state.get("counts"),
+        "counts": state_counts or (db_counts if db_counts else None),
         "coverage": state.get("coverage"),
         "sha_join": state.get("sha_join"),
         "symbol_universe_by_label": state.get("symbol_universe_by_label"),
         "symbol_universe_expected": state.get("symbol_universe_expected"),
-        "stale_links": sum(
-            1
-            for record in model["links"]
-            if record.get("status") == link_store.STATUS_STALE
-        ),
-        "stale": model["stale_reason"] is not None,
+        "stale_links": stale_links,
+        "stale": meta["stale_reason"] is not None,
     }
     notes: List[str] = []
-    if model["stale_reason"]:
-        notes.append(model["stale_reason"])
+    if meta["stale_reason"]:
+        notes.append(meta["stale_reason"])
     if notes:
         data["note"] = "; ".join(notes)
     return data
@@ -580,7 +559,7 @@ def register_tools(mcp: FastMCP) -> None:
         top_k: int = 20,
         min_score: float = 0.0,
     ) -> Dict[str, Any]:
-        """Find code symbols implementing a document (exact-name links)."""
+        """Find code symbols implementing a document (exact-name & IDF-ranked links)."""
         return find_code_for_doc_impl(project_id, doc_id, query, top_k, min_score)
 
     @_standard_tool(mcp)
@@ -605,9 +584,9 @@ def build_mcp() -> FastMCP:
         name=MCP_NAME,
         version="1.0.0",
         instructions=(
-            "Read-only doc↔code traceability. Links are exact-name matches "
-            "(provenance=exact-name, score=1.0). Full document/paragraph "
-            "content lives in mind_mcp; full symbol content in graph_mcp."
+            "Read-only doc↔code traceability. Links are IDF-ranked exact-name "
+            "and context-scoped matches. Full document/paragraph content lives "
+            "in mind_mcp; full symbol content in graph_mcp."
         ),
     )
     register_tools(mcp)

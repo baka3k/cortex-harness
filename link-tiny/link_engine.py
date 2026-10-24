@@ -1,4 +1,4 @@
-"""Link engine — delta → candidates → score → stale propagation → write.
+"""Link engine — delta → candidates → IDF/affinity score → stale propagation → write.
 
 Pure library: takes opened graph handles (anything with ``run(query,
 params)``) plus paths in, produces writes through :mod:`link_store`. Knows
@@ -8,21 +8,28 @@ Isolation contract:
 
 * reads both graphs through the lease-free ``read_only_opener`` — no
   ``StorageLease``, no writes, no Qdrant access;
-* exact-name matching only (Phase 1); provenance ``exact-name``, score
-  ``1.0`` on every record;
+* exact-name + qualified-segment matching with IDF/co-occurrence gating;
+  provenance ``exact-name``, score ``1.0`` for low-DF matches and
+  IDF-weighted ``(0, 1.0]`` for higher-DF matches;
 * identity is ``(path, name, start_line, end_line, parser_type,
   source_sha)`` code-side and ``(doc_id, paragraph_id, source_sha)``
   doc-side — never graph-internal ids;
 * delta SHAs come from the sync baselines (``.cortext-harness/sync-state/``
-  for docs, ``.cache/inventories/`` for code) — the graphs persist no
-  per-document SHA.
+  plus doc source folders for docs, ``.cache/inventories/`` for code) — the
+  graphs persist no per-document SHA.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
+import os
+import re
 import sys
 import time
+import unicodedata
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -49,8 +56,8 @@ CODE_SYMBOL_LABELS = (
     "Property",
     "Field",
 )
-# Framework-writer labels; identity uses ``source_file`` instead of
-# ``file_path`` and carries no line numbers.
+# Framework-writer labels; identity uses ``source_file`` or ``file_path``
+# and carries no line numbers.
 CODE_ENDPOINT_LABELS = (
     "ApiEndpoint",
     "HttpEndpoint",
@@ -66,6 +73,40 @@ DOC_EXTENSIONS = frozenset({".md", ".pdf", ".docx", ".txt", ".pptx", ".xlsx"})
 # Keyset page size for label reads — comfortably below any observed
 # resultset_size (FalkorDB default 10000) so pages are never cut.
 SYMBOL_READ_BATCH = 5000
+
+# v2 scoring & combinatorial explosion guards
+MAX_UNSCOPED_SYMBOL_DF = 8
+MAX_CANDIDATES_PER_TOKEN = 10
+MAX_PARAGRAPHS_PER_DOC_SYMBOL = 3
+SNIPPET_STORE_MAX_CHARS = 240
+REDACTED_GLYPH = "▮"
+
+_GENERIC_FILE_STEMS = frozenset({
+    "common", "program", "assemblyinfo", "resources", "settings",
+    "index", "main", "utils", "helper", "helpers", "base", "default",
+    "config", "constants", "types", "models", "startup",
+})
+_COMPOUND_CODE_SUFFIXES = (
+    ".designer.vb",
+    ".designer.cs",
+    ".razor.cs",
+    ".g.cs",
+    ".g.vb",
+    ".vb",
+    ".cs",
+    ".razor",
+    ".py",
+    ".java",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".go",
+    ".rs",
+    ".cpp",
+    ".c",
+    ".h",
+)
 
 
 class LinkEngineError(RuntimeError):
@@ -157,6 +198,57 @@ class BuildReport:
 
 
 # ---------------------------------------------------------------------------
+# Sensitive-term snippet redaction (pure file reader, no mcp_server import)
+# ---------------------------------------------------------------------------
+
+
+def _load_repo_sensitive_terms() -> List[Tuple[str, bool]]:
+    env_override = os.environ.get("CORTEX_SENSITIVE_TERMS")
+    candidate = (
+        Path(env_override).expanduser()
+        if env_override
+        else Path(__file__).resolve().parents[1] / ".sensitive-terms"
+    )
+    if not candidate.is_file():
+        return []
+    terms: List[Tuple[str, bool]] = []
+    try:
+        raw_lines = candidate.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    for raw in raw_lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("*") and line.endswith("*") and len(line) > 2:
+            line = line[1:-1].strip()
+        if line.startswith("case:"):
+            term = line[len("case:"):].strip()
+            if term:
+                terms.append((term, True))
+        else:
+            terms.append((line, False))
+    return terms
+
+
+def _redact_snippet_for_store(
+    text: str,
+    terms: Sequence[Tuple[str, bool]],
+    max_chars: int = SNIPPET_STORE_MAX_CHARS,
+) -> str:
+    output = str(text or "")
+    if not output:
+        return ""
+    for term, case_sensitive in terms:
+        if not term:
+            continue
+        flags = 0 if case_sensitive else re.IGNORECASE
+        replacement = REDACTED_GLYPH * min(len(term), 8)
+        output = re.sub(re.escape(term), replacement, output, flags=flags)
+    return output[:max_chars]
+
+
+# ---------------------------------------------------------------------------
 # Graph readers (read-only handles in, plain data out)
 # ---------------------------------------------------------------------------
 
@@ -189,25 +281,7 @@ def _paged_rows(
     batch: int,
     what: str,
 ) -> List[Dict[str, Any]]:
-    """All rows of one match, paged over the anchor's internal-id space.
-
-    The server's ``resultset_size`` caps a single query's result set
-    (FalkorDB default 10000, silent) — paging keeps every page under it.
-    Pages are scoped to a window of ``id_exprs[0]`` (``$wlo``/``$whi``,
-    width targets ~one batch of rows); when a page ends inside the
-    boundary anchor's group, ``group_cypher`` resumes that group past
-    ``$after``. Both predicates are AND-only so FalkorDB pushes them to
-    the anchor scan — the previous pager's shapes forced full-graph work
-    per page (growing ``SKIP`` re-ran the whole traversal + sort;
-    an ``OR``-shaped cursor referencing ``id(e)`` defeated filter
-    pushdown: ~6x slower measured) and blew the server's query timeout.
-    Bounds are parameterized so each shape compiles one server plan per
-    read. Invariant: rows read == the server's count; a shortfall is a
-    loud warning, never a silent cut (a silent doc-side cut would be
-    destructive — missing paragraphs stale their own links).
-
-    Rows without ``_*_id`` columns degrade to a single-page read.
-    """
+    """All rows of one match, paged over the anchor's internal-id space."""
     expected_rows = _run(graph, count_cypher, pid=pid)
     expected = expected_rows[0].get("c") if expected_rows else None
     expected = int(expected) if expected is not None else None
@@ -330,9 +404,92 @@ def read_doc_paragraphs(doc_graph: Any, project_id_normalized: str) -> List[Para
 
 
 def read_doc_entity_names(
-    doc_graph: Any, project_id_normalized: str
+    doc_graph: Any,
+    project_id_normalized: str,
+    match_index: Optional[Mapping[Tuple[str, ...], Sequence[CodeSymbolRef]]] = None,
 ) -> Dict[tuple, List[str]]:
-    """Map ``(source_id, paragraph_id)`` → entity names mentioning it."""
+    """Map ``(source_id, paragraph_id)`` → entity names mentioning it.
+
+    When ``match_index`` is supplied and the graph exposes ``Entity`` nodes,
+    uses a 2-stage filtered query (read distinct ``Entity`` nodes first, keep
+    only identifier-shaped entities that match a known code symbol, then fetch
+    ``HAS_ENTITY`` edges for those entity ids). This avoids scanning 2M+
+    prose entity edges when only ~1% match code symbols.
+    """
+    if match_index is not None:
+        try:
+            cnt_rows = _run(
+                doc_graph,
+                "MATCH (e:Entity) WHERE e.project_id_normalized = $pid RETURN count(e) AS c",
+                pid=project_id_normalized,
+            )
+            entity_count = int(cnt_rows[0]["c"]) if cnt_rows and cnt_rows[0].get("c") is not None else 0
+        except Exception:
+            entity_count = 0
+
+        if entity_count > 0:
+            entity_rows = _paged_rows(
+                doc_graph,
+                match_cypher=(
+                    "MATCH (e:Entity) "
+                    "WHERE e.project_id_normalized = $pid "
+                    "AND id(e) >= $wlo AND id(e) < $whi "
+                    "RETURN id(e) AS _node_id, e.name AS name"
+                ),
+                group_cypher=(
+                    "MATCH (e:Entity) "
+                    "WHERE e.project_id_normalized = $pid "
+                    "AND id(e) = $wlo AND id(e) > $after "
+                    "RETURN id(e) AS _node_id, e.name AS name"
+                ),
+                count_cypher=(
+                    "MATCH (e:Entity) "
+                    "WHERE e.project_id_normalized = $pid "
+                    "RETURN count(e) AS c"
+                ),
+                range_cypher=(
+                    "MATCH (e:Entity) "
+                    "WHERE e.project_id_normalized = $pid "
+                    "RETURN min(id(e)) AS lo, max(id(e)) AS hi"
+                ),
+                id_exprs=["id(e)"],
+                pid=project_id_normalized,
+                batch=SYMBOL_READ_BATCH,
+                what="Entity",
+            )
+            matched_eids: List[int] = []
+            for row in entity_rows:
+                eid = row.get("_node_id")
+                name = str(row.get("name") or "").strip()
+                if (
+                    eid is not None
+                    and normalizers.is_linkable_entity_token(name)
+                    and normalizers.match_index_lookup(match_index, name)
+                ):
+                    matched_eids.append(int(eid))
+
+            mentions: Dict[tuple, List[str]] = {}
+            for offset in range(0, len(matched_eids), 500):
+                chunk = matched_eids[offset : offset + 500]
+                edge_rows = _run(
+                    doc_graph,
+                    "MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity) "
+                    "WHERE p.project_id_normalized = $pid AND id(e) IN $eids "
+                    "RETURN p.source_id AS source_id, p.paragraph_id AS paragraph_id, "
+                    "e.name AS name",
+                    pid=project_id_normalized,
+                    eids=chunk,
+                )
+                for row in edge_rows:
+                    anchor = (str(row.get("source_id") or ""), row.get("paragraph_id"))
+                    name = str(row.get("name") or "").strip()
+                    if not anchor[0] or not name:
+                        continue
+                    names = mentions.setdefault(anchor, [])
+                    if name not in names:
+                        names.append(name)
+            return mentions
+
     rows = _paged_rows(
         doc_graph,
         match_cypher=(
@@ -366,7 +523,7 @@ def read_doc_entity_names(
         batch=SYMBOL_READ_BATCH,
         what="HAS_ENTITY edges",
     )
-    mentions: Dict[tuple, List[str]] = {}
+    mentions = {}
     for row in rows:
         anchor = (str(row.get("source_id") or ""), row.get("paragraph_id"))
         name = str(row.get("name") or "").strip()
@@ -403,16 +560,11 @@ def _read_labeled_symbols_paged(
 ) -> Tuple[List[EngineSymbol], Dict[str, int]]:
     """Read one label in internal-id window batches.
 
-    Invariant (plan 261019-1700 Phase 03): rows read == the server's count
-    for the label, regardless of the server's ``resultset_size`` — the
-    server caps each query's RESULT SET (observed: FalkorDB default
-    10000, silently truncating an unpaginated read), and paging keeps
-    every page under it. A shortfall vs the count is a loud warning,
-    never a silent cut. Paging shares :func:`_paged_rows` so label reads
-    cost pages proportional to rows, not the quadratic-growing SKIP the
-    pager replaced.
+    Returns both ``n.file_path`` and ``n.source_file`` for endpoint labels so
+    parsers that stamp either property (e.g. ASP.NET Core ``HttpEndpoint`` /
+    ``Route`` using ``file_path`` vs ``ApiEndpoint`` using ``source_file``)
+    preserve 100% of their endpoints.
     """
-    path_property = "source_file" if target_type == "endpoint" else "file_path"
     expected = _label_server_count(graph, label, project_id_normalized)
     rows = _paged_rows(
         graph,
@@ -422,7 +574,8 @@ def _read_labeled_symbols_paged(
             "AND id(n) >= $wlo AND id(n) < $whi "
             "RETURN id(n) AS _node_id, n.name AS name, "
             "n.qualified_name AS qualified_name, "
-            f"n.{path_property} AS file_path, n.start_line AS start_line, "
+            "n.file_path AS file_path, n.source_file AS source_file, "
+            "n.start_line AS start_line, "
             "n.end_line AS end_line, n.language AS language, n.repo AS repo"
         ),
         group_cypher=(
@@ -431,7 +584,8 @@ def _read_labeled_symbols_paged(
             "AND id(n) = $wlo AND id(n) > $after "
             "RETURN id(n) AS _node_id, n.name AS name, "
             "n.qualified_name AS qualified_name, "
-            f"n.{path_property} AS file_path, n.start_line AS start_line, "
+            "n.file_path AS file_path, n.source_file AS source_file, "
+            "n.start_line AS start_line, "
             "n.end_line AS end_line, n.language AS language, n.repo AS repo"
         ),
         count_cypher=(
@@ -452,7 +606,12 @@ def _read_labeled_symbols_paged(
     symbols: List[EngineSymbol] = []
     for row in rows:
         name = str(row.get("name") or "").strip()
-        path = link_store.posix_path(row.get("file_path"))
+        raw_path = (
+            row.get("source_file") or row.get("file_path")
+            if target_type == "endpoint"
+            else row.get("file_path") or row.get("source_file")
+        )
+        path = link_store.posix_path(raw_path)
         if not name or not path:
             continue
         symbols.append(
@@ -499,12 +658,7 @@ def read_code_symbols_report(
     batch: int = SYMBOL_READ_BATCH,
     progress: ProgressFn = _NOOP_PROGRESS,
 ) -> Tuple[List[EngineSymbol], Dict[str, Dict[str, int]]]:
-    """Read every symbol + endpoint label with per-label read accounting.
-
-    Returns ``(symbols, {label: {rows_read, expected, kept}})`` — the
-    per-label-accounted ``symbol_universe`` that makes a future
-    resultset-cap regression visible in the sync report.
-    """
+    """Read every symbol + endpoint label with per-label read accounting."""
     symbols: List[EngineSymbol] = []
     by_label: Dict[str, Dict[str, int]] = {}
     all_labels = [
@@ -540,28 +694,18 @@ def read_code_symbols(
     project_id_normalized: str,
     parser_type: Optional[str] = None,
 ) -> List[EngineSymbol]:
-    """Read symbol + endpoint labels; a missing label degrades to a warning.
-
-    Graphs from older parsers lack some framework labels — one dead label
-    must not take the whole build down. Reads are paginated, so the
-    server's ``resultset_size`` never silently drops rows.
-    """
+    """Read symbol + endpoint labels; a missing label degrades to a warning."""
     symbols, _by_label = read_code_symbols_report(code_graph, project_id_normalized, parser_type)
     return symbols
 
 
 # ---------------------------------------------------------------------------
-# Delta inputs: sync baselines (the graphs persist no per-document SHA)
+# Delta inputs: sync baselines + doc folder SHA supplement
 # ---------------------------------------------------------------------------
 
 
 def load_sync_state_hashes(project_dir: Path) -> Dict[str, str]:
-    """Merge ``file_hashes`` from every ``.cortext-harness/sync-state/*.json``.
-
-    dev.py writes one state file per scanned folder (``doc:{folder}`` for
-    docs, plain folders for code), so the merged map is the project-wide
-    baseline; ``split_shas_by_side`` classifies entries by extension.
-    """
+    """Merge ``file_hashes`` from every ``.cortext-harness/sync-state/*.json``."""
     merged: Dict[str, str] = {}
     state_dir = Path(project_dir) / ".cortext-harness" / "sync-state"
     if not state_dir.is_dir():
@@ -577,6 +721,46 @@ def load_sync_state_hashes(project_dir: Path) -> Dict[str, str]:
         if isinstance(hashes, Mapping):
             for rel, sha in hashes.items():
                 merged[link_store.posix_path(rel)] = str(sha)
+    return merged
+
+
+def load_doc_folder_hashes(
+    doc_folders: Iterable[str],
+    existing: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """Supplement sync-state doc SHAs by scanning configured doc source folders.
+
+    When a doc folder was ingested across multiple partial runs or before
+    sync-state tracking captured every file, scanning the configured doc
+    folders ensures 100% of on-disk doc files have a valid SHA-256 baseline.
+    """
+    merged: Dict[str, str] = {
+        link_store.posix_path(rel): str(sha)
+        for rel, sha in (existing or {}).items()
+    }
+    for folder in doc_folders:
+        root = Path(folder).expanduser()
+        if not root.is_dir():
+            continue
+        root_resolved = root.resolve()
+        for file_path in sorted(root_resolved.rglob("*")):
+            if not file_path.is_file():
+                continue
+            name = file_path.name
+            if name.startswith("~$") or name.startswith("."):
+                continue
+            if file_path.suffix.lower() not in DOC_EXTENSIONS:
+                continue
+            try:
+                rel = file_path.relative_to(root_resolved).as_posix()
+            except ValueError:
+                continue
+            if rel in merged:
+                continue
+            try:
+                merged[rel] = hashlib.sha256(file_path.read_bytes()).hexdigest()
+            except OSError:
+                continue
     return merged
 
 
@@ -599,15 +783,13 @@ def _read_folder_inventory_entries(
     code_folders: Iterable[str],
     project_id: str,
 ) -> List[Tuple[str, Dict[str, str]]]:
-    """Newest per-folder inventory as ``(resolved_folder, {rel → sha})``.
+    """Per-folder inventory as ``(resolved_folder, {rel → sha})``.
 
-    Shared chain reader for both flat and repo-aware baseline loaders:
-    ``{folder}/.cache/incremental_sync/{safe_project}_{scope}.json`` →
-    ``inventory_path`` → ``{folder}/.cache/inventories/{snapshot}.json``
-    with ``entries: {rel_path: {sha256, …}}``.
+    Merges all valid incremental_sync scope states for the folder in
+    chronological ``last_run_after`` order (oldest first, newest last) so
+    multi-language folders keep every language's file hashes while newest
+    snapshots win on overlapping files.
     """
-    import re
-
     safe_project = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(project_id)).strip("._") or "project"
     result: List[Tuple[str, Dict[str, str]]] = []
     for folder in code_folders:
@@ -617,40 +799,38 @@ def _read_folder_inventory_entries(
         candidates = sorted(cache_dir.glob(f"{safe_project}_*.json"))
         legacy = cache_dir.glob(f"{safe_project}.json")
         candidates.extend(sorted(legacy))
-        newest_state: Optional[Dict[str, Any]] = None
-        for state_path in candidates:
+        states: List[Tuple[str, int, Mapping[str, Any]]] = []
+        for idx, state_path in enumerate(candidates):
             try:
                 payload = json.loads(state_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if not isinstance(payload, Mapping):
                 continue
-            # newest wins: prefer the latest last_run_after token
-            if (
-                newest_state is None
-                or str(payload.get("last_run_after") or "")
-                >= str(newest_state.get("last_run_after") or "")
-            ):
-                newest_state = dict(payload)
-        inventory_path = str((newest_state or {}).get("inventory_path") or "").strip()
-        if not inventory_path:
+            states.append((str(payload.get("last_run_after") or ""), idx, payload))
+        if not states:
             continue
-        try:
-            inventory = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        entries = inventory.get("entries") if isinstance(inventory, Mapping) else None
-        if not isinstance(entries, Mapping):
-            continue
+        states.sort(key=lambda item: (item[0], item[1]))
         folder_root = Path(folder).expanduser().resolve()
         mapping: Dict[str, str] = {}
-        for rel, entry in entries.items():
-            if not isinstance(entry, Mapping):
+        for _run_at, _idx, state_payload in states:
+            inventory_path = str(state_payload.get("inventory_path") or "").strip()
+            if not inventory_path:
                 continue
-            sha = entry.get("sha256")
-            if not sha:
+            try:
+                inventory = json.loads(Path(inventory_path).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
                 continue
-            mapping[link_store.posix_path(rel)] = str(sha)
+            entries = inventory.get("entries") if isinstance(inventory, Mapping) else None
+            if not isinstance(entries, Mapping):
+                continue
+            for rel, entry in entries.items():
+                if not isinstance(entry, Mapping):
+                    continue
+                sha = entry.get("sha256")
+                if not sha:
+                    continue
+                mapping[link_store.posix_path(rel)] = str(sha)
         if mapping:
             result.append((str(folder_root), mapping))
     return result
@@ -666,22 +846,13 @@ JOIN_AMBIGUOUS = "ambiguous"
 
 
 def flatten_doc_rel(rel: str) -> str:
-    """dev.py's ``source_id`` rule: POSIX rel with both separators → ``__``.
-
-    Mirrors ``doc-tiny/graphrag_ingest_langextract._safe_source_id`` (and
-    dev.py ``_prune_yake_rule_files``): ``a/b.md`` → ``a__b.md``. Never
-    applied in reverse — file names may legitimately contain ``__``.
-    """
+    """dev.py's ``source_id`` rule: POSIX rel with both separators → ``__``."""
     posix = link_store.posix_path(rel)
     return posix.replace("/", "__").replace("\\", "__")
 
 
 def normalize_repo_key(value: Any) -> str:
-    """Canonical lookup key for a graph ``repo`` / configured folder.
-
-    Resolved absolute POSIX path, casefolded for lookup only (macOS/Windows
-    case-insensitivity). Empty input maps to ``""`` — never a folder key.
-    """
+    """Canonical lookup key for a graph ``repo`` / configured folder."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -696,70 +867,101 @@ class DocShaIndex:
     """Baseline lookup structure for one build (built once, not per record).
 
     ``direct`` holds POSIX rel keys, ``flattened`` their ``__``-spelling
-    (dev.py ``source_id``), ``stems`` groups keys per file stem. A
-    flattened id or stem shared by keys with *different* SHAs maps to
-    ``None`` — genuine upstream ambiguity degrades to null, never a guess
-    (the graph itself cannot tell the two files apart).
+    (dev.py ``source_id``), ``flattened_no_ext`` their extensionless
+    ``__``-spelling, and ``stems`` groups keys per file stem. Any key shared
+    by files with *different* SHAs maps to ``None`` — genuine upstream
+    ambiguity degrades to null, never a guess.
     """
 
     direct: Dict[str, str]
     flattened: Dict[str, Optional[str]]
     stems: Dict[str, List[str]]
+    flattened_no_ext: Dict[str, Optional[str]] = field(default_factory=dict)
+
+
+def _record_unambiguous_sha(
+    table: Dict[str, Optional[str]], key: str, sha: str
+) -> None:
+    existing = table.get(key)
+    if key in table and existing != sha:
+        table[key] = None  # differing SHAs → ambiguous, stays so
+    elif existing is None and key not in table:
+        table[key] = str(sha)
 
 
 def build_doc_sha_index(doc_shas: Mapping[str, str]) -> DocShaIndex:
     direct: Dict[str, str] = {}
     flattened: Dict[str, Optional[str]] = {}
+    flattened_no_ext: Dict[str, Optional[str]] = {}
     stems: Dict[str, List[str]] = {}
     for rel, sha in doc_shas.items():
-        posix = link_store.posix_path(rel)
-        direct[posix] = str(sha)
-        flat_id = flatten_doc_rel(posix)
-        existing = flattened.get(flat_id)
-        if flat_id in flattened and existing != sha:
-            flattened[flat_id] = None  # differing SHAs → ambiguous, stays so
-        elif existing is None:
-            flattened[flat_id] = str(sha)
-        stems.setdefault(Path(posix).stem, []).append(posix)
-    return DocShaIndex(direct=direct, flattened=flattened, stems=stems)
+        base_posix = link_store.posix_path(rel)
+        sha_str = str(sha)
+        variants = list(
+            dict.fromkeys(
+                (
+                    base_posix,
+                    unicodedata.normalize("NFC", base_posix),
+                    unicodedata.normalize("NFD", base_posix),
+                )
+            )
+        )
+        for posix in variants:
+            direct[posix] = sha_str
+            flat_id = flatten_doc_rel(posix)
+            _record_unambiguous_sha(flattened, flat_id, sha_str)
+            p_obj = Path(posix)
+            if p_obj.suffix:
+                no_ext = flatten_doc_rel(p_obj.with_suffix("").as_posix())
+                _record_unambiguous_sha(flattened_no_ext, no_ext, sha_str)
+            stems.setdefault(p_obj.stem, []).append(posix)
+    return DocShaIndex(
+        direct=direct,
+        flattened=flattened,
+        stems=stems,
+        flattened_no_ext=flattened_no_ext,
+    )
 
 
 def _doc_sha_for(doc_id: str, index: DocShaIndex) -> Optional[str]:
-    """Doc SHA per contract: direct rel → flattened → agreeing stem set."""
+    """Doc SHA per contract: direct rel → flattened → flattened_no_ext → stem."""
     doc_id = link_store.posix_path(doc_id)
     if not doc_id:
         return None
-    sha = index.direct.get(doc_id)
-    if sha:
-        return sha
-    sha = index.flattened.get(doc_id)
-    if sha:
-        return sha
-    keys = index.stems.get(doc_id)
-    if keys:
-        stem_shas = {index.direct[key] for key in keys}
-        if len(stem_shas) == 1:
-            return next(iter(stem_shas))  # same content under one stem: exact
+    variants = list(
+        dict.fromkeys(
+            (
+                doc_id,
+                unicodedata.normalize("NFC", doc_id),
+                unicodedata.normalize("NFD", doc_id),
+            )
+        )
+    )
+    for variant in variants:
+        sha = index.direct.get(variant)
+        if sha:
+            return sha
+    for variant in variants:
+        sha = index.flattened.get(variant)
+        if sha:
+            return sha
+    for variant in variants:
+        if variant in index.flattened and index.flattened[variant] is None:
+            return None
+        sha = index.flattened_no_ext.get(variant)
+        if sha:
+            return sha
+    for variant in variants:
+        keys = index.stems.get(variant)
+        if keys:
+            stem_shas = {index.direct[key] for key in keys if key in index.direct}
+            if len(stem_shas) == 1:
+                return next(iter(stem_shas))
     return None
 
 
 class CodeShaIndex:
-    """Repo-aware resolver: ``(graph repo, graph path)`` → inventory SHA.
-
-    Resolution order (never a naive suffix match — the live deployment carries 1
-    exact cross-folder collision and 152 suffix shadows):
-
-    1. ``(repo, path)`` exact against the repo-aware folder maps;
-    2. a ``repo`` pinning a KNOWN folder is authoritative: a path its map
-       lacks is ``missing`` — another folder's same-spelled file is a
-       different file, never a borrowed SHA;
-    3. unique cross-folder fallback — only when ``repo`` is null/foreign
-       (endpoint labels; parsers stamping a project root): exactly one
-       known folder whose folder-relative map contains ``path``;
-    4. flat-map direct hit, then a unique component-boundary suffix match
-       over flat project-relative keys (legacy callers);
-    5. otherwise ``missing``; more than one candidate → ``ambiguous``.
-    """
+    """Repo-aware resolver: ``(graph repo, graph path)`` → inventory SHA."""
 
     def __init__(
         self,
@@ -775,7 +977,6 @@ class CodeShaIndex:
             link_store.posix_path(rel): str(sha)
             for rel, sha in (flat or {}).items()
         }
-        # basename → flat keys sharing it (bounds the suffix fallback)
         self._flat_by_basename: Dict[str, List[str]] = {}
         for key in self.flat:
             self._flat_by_basename.setdefault(Path(key).name, []).append(key)
@@ -787,7 +988,6 @@ class CodeShaIndex:
         repo_key = normalize_repo_key(repo)
         folder = self.folders.get(repo_key) if repo_key else None
         if folder is not None:
-            # the pin is authoritative — no borrowing across folders
             if path in folder:
                 return folder[path], JOIN_MATCHED
             return None, JOIN_MISSING
@@ -821,13 +1021,7 @@ def load_code_inventory_hashes(
     project_id: str,
     project_dir: Path,
 ) -> Dict[str, str]:
-    """Read per-file SHAs from the newest code-sync inventory per folder.
-
-    Flat project-wide view: paths are re-expressed relative to
-    ``project_dir`` when the folder lives inside it, else kept
-    folder-relative (identity stays stable either way). The repo-aware
-    view lives in :func:`load_code_folder_inventories`.
-    """
+    """Read per-file SHAs from the code-sync inventories per folder."""
     merged: Dict[str, str] = {}
     project_dir = Path(project_dir).resolve()
     for folder_root, mapping in _read_folder_inventory_entries(code_folders, project_id):
@@ -846,14 +1040,7 @@ def load_code_folder_inventories(
     code_folders: Iterable[str],
     project_id: str,
 ) -> Dict[str, Dict[str, str]]:
-    """Repo-aware baseline: ``{resolved scan folder → {folder_rel → sha}}``.
-
-    Folder keys are the resolved absolute POSIX paths the code graph's
-    ``repo`` property stamps (``normalize_repo_key`` matches them,
-    casefolded on lookup only). Values stay **folder-relative** — the
-    same spelling the graph's ``file_path`` uses — so the
-    ``(repo, path)`` join is an exact dict hit.
-    """
+    """Repo-aware baseline: ``{resolved scan folder → {folder_rel → sha}}``."""
     return {
         folder_root: dict(mapping)
         for folder_root, mapping in _read_folder_inventory_entries(
@@ -863,7 +1050,7 @@ def load_code_folder_inventories(
 
 
 # ---------------------------------------------------------------------------
-# Record assembly
+# Record assembly & IDF/affinity-scored candidate generation
 # ---------------------------------------------------------------------------
 
 
@@ -886,6 +1073,8 @@ def build_record(
     symbol: EngineSymbol,
     doc_sha: Optional[str],
     code_sha: Optional[str],
+    score: float = normalizers.EXACT_NAME_SCORE,
+    provenance: str = normalizers.EXACT_NAME_PROVENANCE,
 ) -> Dict[str, Any]:
     """One v1 link record (provenance + score mandatory, POSIX paths)."""
     return {
@@ -909,9 +1098,155 @@ def build_record(
             ),
             "source_sha": code_sha,
         },
-        "score": normalizers.EXACT_NAME_SCORE,
-        "provenance": normalizers.EXACT_NAME_PROVENANCE,
+        "score": float(score),
+        "provenance": str(provenance),
     }
+
+
+def _clean_file_stem(path_str: str) -> str:
+    """Lowercased base module stem stripped of compound language suffixes."""
+    name = Path(link_store.posix_path(path_str)).name.casefold()
+    for suffix in _COMPOUND_CODE_SUFFIXES:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            return name[: -len(suffix)]
+    return Path(name).stem.casefold()
+
+
+def compute_scored_pairs(
+    paragraphs: Sequence[ParagraphRef],
+    entity_mentions: Mapping[tuple, Sequence[str]],
+    symbols: Sequence[EngineSymbol],
+    *,
+    match_index: Optional[Dict[Tuple[str, ...], List[CodeSymbolRef]]] = None,
+) -> List[Tuple[ParagraphRef, EngineSymbol, float, str]]:
+    """Compute ``(paragraph, symbol, score, provenance)`` pairs with IDF gating.
+
+    * Symbols appearing in ``<= 2`` files keep ``score = 1.0`` (exact-name).
+    * Symbols appearing in ``3 .. MAX_UNSCOPED_SYMBOL_DF`` files receive an
+      IDF-weighted score ``(0, 1.0]`` with a ``+0.20`` file-affinity bonus.
+    * High-DF symbols (``file_df > MAX_UNSCOPED_SYMBOL_DF``) are linked ONLY
+      when the paragraph/document establishes file-context affinity (the
+      symbol's file stem appears in ``doc_id`` or co-occurs with a low-DF
+      symbol ``file_df <= 3`` from the same file/module in that paragraph).
+    * Per-token fan-out is capped at ``MAX_CANDIDATES_PER_TOKEN`` and
+      redundant paragraph links for the same ``(doc_id, symbol.identity)``
+      are capped at ``MAX_PARAGRAPHS_PER_DOC_SYMBOL``.
+    """
+    if not paragraphs or not symbols:
+        return []
+    symbol_refs = [symbol.as_symbol_ref() for symbol in symbols]
+    symbol_by_ref = dict(zip(symbol_refs, symbols))
+    if match_index is None:
+        match_index = normalizers.build_match_index(symbol_refs)
+
+    # Document frequency: number of distinct code files defining each match key
+    key_file_df: Dict[Tuple[str, ...], int] = {
+        key: len({ref.path for ref in refs})
+        for key, refs in match_index.items()
+    }
+    sym_stem: Dict[tuple, str] = {
+        symbol.identity: _clean_file_stem(symbol.path) for symbol in symbols
+    }
+    meaningful_stems = {
+        stem for stem in sym_stem.values()
+        if len(stem) >= 4 and stem not in _GENERIC_FILE_STEMS
+    }
+    unique_doc_ids = {p.doc_id for p in paragraphs}
+    doc_stems: Dict[str, set[str]] = {}
+    for doc_id in unique_doc_ids:
+        doc_lower = doc_id.casefold()
+        doc_stems[doc_id] = {
+            stem for stem in meaningful_stems if stem in doc_lower
+        }
+
+    text_keys_cache: Dict[str, List[Tuple[str, ...]]] = {}
+    doc_sym_counts: Counter = Counter()
+    results: List[Tuple[ParagraphRef, EngineSymbol, float, str]] = []
+
+    for paragraph in paragraphs:
+        cached_keys = text_keys_cache.get(paragraph.text)
+        if cached_keys is None:
+            raw_tokens = normalizers.extract_identifier_tokens(paragraph.text)
+            keys_list: List[Tuple[str, ...]] = []
+            seen_k: set[Tuple[str, ...]] = set()
+            for tok in raw_tokens:
+                if not normalizers.is_linkable_token(tok):
+                    continue
+                k = normalizers.token_match_key(tok)
+                if k and k in match_index and k not in seen_k:
+                    seen_k.add(k)
+                    keys_list.append(k)
+            text_keys_cache[paragraph.text] = keys_list
+            cached_keys = keys_list
+
+        ent_tokens = entity_mentions.get(paragraph.anchor, ())
+        if ent_tokens:
+            para_keys = list(cached_keys)
+            seen_para_k = set(para_keys)
+            for ent in ent_tokens:
+                if not normalizers.is_linkable_entity_token(ent):
+                    continue
+                k = normalizers.token_match_key(ent)
+                if k and k in match_index and k not in seen_para_k:
+                    seen_para_k.add(k)
+                    para_keys.append(k)
+        else:
+            para_keys = cached_keys
+
+        if not para_keys:
+            continue
+
+        # Establish active file-context stems from doc_id + low-DF symbols in paragraph
+        active_stems = set(doc_stems.get(paragraph.doc_id) or ())
+        for key in para_keys:
+            if 0 < key_file_df.get(key, 0) <= 3:
+                for ref in match_index.get(key, ()):
+                    st = sym_stem[symbol_by_ref[ref].identity]
+                    if len(st) >= 4 and st not in _GENERIC_FILE_STEMS:
+                        active_stems.add(st)
+
+        best_by_identity: Dict[tuple, Tuple[float, EngineSymbol]] = {}
+        for key in para_keys:
+            df = key_file_df.get(key, 0)
+            if df == 0:
+                continue
+            token_candidates: List[Tuple[float, EngineSymbol]] = []
+            for ref in match_index.get(key, ()):
+                symbol = symbol_by_ref[ref]
+                st = sym_stem[symbol.identity]
+                has_affinity = bool(st and st in active_stems)
+                if df > MAX_UNSCOPED_SYMBOL_DF and not has_affinity:
+                    continue
+                if df <= 2:
+                    score = normalizers.EXACT_NAME_SCORE
+                else:
+                    base = 0.95 if symbol.target_type == "endpoint" else 0.85
+                    idf = 1.0 / (1.0 + 0.30 * math.log(df))
+                    bonus = 0.20 if has_affinity else 0.0
+                    score = round(min(1.0, base * idf + bonus), 4)
+                token_candidates.append((score, symbol))
+
+            if len(token_candidates) > MAX_CANDIDATES_PER_TOKEN:
+                token_candidates.sort(
+                    key=lambda item: (-item[0], item[1].path, item[1].name)
+                )
+                token_candidates = token_candidates[:MAX_CANDIDATES_PER_TOKEN]
+
+            for score, symbol in token_candidates:
+                prev = best_by_identity.get(symbol.identity)
+                if prev is None or score > prev[0]:
+                    best_by_identity[symbol.identity] = (score, symbol)
+
+        for score, symbol in best_by_identity.values():
+            ds_key = (paragraph.doc_id, symbol.identity)
+            if doc_sym_counts[ds_key] >= MAX_PARAGRAPHS_PER_DOC_SYMBOL:
+                continue
+            doc_sym_counts[ds_key] += 1
+            results.append(
+                (paragraph, symbol, score, normalizers.EXACT_NAME_PROVENANCE)
+            )
+
+    return results
 
 
 def compute_fresh_pairs(
@@ -919,39 +1254,17 @@ def compute_fresh_pairs(
     entity_mentions: Mapping[tuple, Sequence[str]],
     symbols: Sequence[EngineSymbol],
 ) -> List[Tuple[ParagraphRef, EngineSymbol]]:
-    """All exact-name (paragraph, symbol) pairs, deduped, deterministic.
-
-    Tokens per paragraph = graph entity names + identifier-like tokens
-    extracted from the paragraph text. Same name in N files yields N pairs
-    (never auto-select — plan risk R5).
-    """
-    symbol_refs = [symbol.as_symbol_ref() for symbol in symbols]
-    symbol_by_ref = dict(zip(symbol_refs, symbols))
-    match_index = normalizers.build_match_index(symbol_refs)
-    pairs: List[Tuple[ParagraphRef, EngineSymbol]] = []
-    seen: set[tuple] = set()
-    for paragraph in paragraphs:
-        tokens = list(entity_mentions.get(paragraph.anchor, ()))
-        tokens.extend(normalizers.extract_identifier_tokens(paragraph.text))
-        matched_symbols: List[EngineSymbol] = []
-        matched_identities: set[tuple] = set()
-        for token in tokens:
-            for ref, _score, _prov in normalizers.match_index_lookup(match_index, token):
-                symbol = symbol_by_ref[ref]
-                if symbol.identity not in matched_identities:
-                    matched_identities.add(symbol.identity)
-                    matched_symbols.append(symbol)
-        for symbol in matched_symbols:
-            key = (paragraph.anchor, symbol.identity)
-            if key in seen:
-                continue
-            seen.add(key)
-            pairs.append((paragraph, symbol))
-    return pairs
+    """All matched ``(paragraph, symbol)`` pairs, deduped, deterministic."""
+    return [
+        (paragraph, symbol)
+        for paragraph, symbol, _score, _prov in compute_scored_pairs(
+            paragraphs, entity_mentions, symbols
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
-# The 5-step pipeline
+# The pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -969,22 +1282,7 @@ def build_links(
     code_folder_shas: Optional[Mapping[str, Mapping[str, str]]] = None,
     progress: ProgressFn = _NOOP_PROGRESS,
 ) -> BuildReport:
-    """Run the full pipeline for one project.
-
-    Complexity per step (n = data size, bounded by graph/file contents):
-
-    * Step 1 — graph reads: O(P + E + S) where P=paragraphs, E=entity
-      edges, S=symbols.  Doc reads run in parallel (2 threads).  Code
-      reads iterate 14 labels sequentially (shared connection).
-    * Step 2 — matching: O(P·T·M) with M bounded (exact-name, typically
-      1–5 matches/token) → effectively O(total_tokens) = O(n).
-    * Step 3 — SHA join: O(S) dict lookups, one per unique identity.
-    * Step 4 — stale propagation: O(L) single pass over cached records
-      (no re-read of links.jsonl).
-    * Step 5 — write + coverage: O(F + L) where F=fresh pairs.
-
-    ``dry_run`` computes everything and writes nothing.
-    """
+    """Run the full pipeline for one project."""
     t_pipeline = time.monotonic()
     links_dir = Path(links_dir)
     doc_index = build_doc_sha_index(doc_shas)
@@ -992,28 +1290,12 @@ def build_links(
     pid = _norm(project_id)
 
     # ── Step 1/6: Read graph data ────────────────────────────────────────
-    # Doc reads are independent → parallel (2 threads, same read-only graph).
-    # Code reads: 14 labels × (count + range + paged) → sequential per label.
     progress("[step 1/6] Reading graph data...")
     t1 = time.monotonic()
 
-    paragraphs: List[ParagraphRef] = []
-    entity_mentions: Dict[tuple, List[str]] = {}
-
-    try:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            fut_paras = pool.submit(read_doc_paragraphs, doc_graph, pid)
-            fut_entities = pool.submit(read_doc_entity_names, doc_graph, pid)
-            paragraphs = fut_paras.result()
-            entity_mentions = fut_entities.result()
-    except Exception:
-        paragraphs = read_doc_paragraphs(doc_graph, pid)
-        entity_mentions = read_doc_entity_names(doc_graph, pid)
-
+    paragraphs = read_doc_paragraphs(doc_graph, pid)
     progress(
         f"[step 1/6]   doc paragraphs: {len(paragraphs)}  "
-        f"entity mentions: {len(entity_mentions)}  "
         f"({time.monotonic() - t1:.1f}s)"
     )
 
@@ -1024,6 +1306,17 @@ def build_links(
     progress(
         f"[step 1/6]   code symbols: {len(symbols)}  "
         f"({time.monotonic() - t1b:.1f}s)"
+    )
+
+    t1c = time.monotonic()
+    symbol_refs = [symbol.as_symbol_ref() for symbol in symbols]
+    match_index = normalizers.build_match_index(symbol_refs)
+    entity_mentions = read_doc_entity_names(
+        doc_graph, pid, match_index=match_index
+    )
+    progress(
+        f"[step 1/6]   entity mentions: {len(entity_mentions)}  "
+        f"({time.monotonic() - t1c:.1f}s)"
     )
     progress(f"[step 1/6] Reading graph data done ({time.monotonic() - t1:.1f}s)")
 
@@ -1058,18 +1351,21 @@ def build_links(
         f"({time.monotonic() - t2:.1f}s)"
     )
 
-    # ── Step 3/6: Match paragraphs × symbols (O(P·T·M) ≈ O(n)) ─────────
-    progress("[step 3/6] Matching paragraphs × symbols (exact-name)...")
+    # ── Step 3/6: Match paragraphs × symbols (IDF + affinity gated) ──────
+    progress("[step 3/6] Matching paragraphs × symbols...")
     t3 = time.monotonic()
-    fresh_pairs = compute_fresh_pairs(paragraphs, entity_mentions, symbols)
+    scored_pairs = compute_scored_pairs(
+        paragraphs, entity_mentions, symbols, match_index=match_index
+    )
     progress(
-        f"[step 3/6] Matching: {len(fresh_pairs)} pairs "
+        f"[step 3/6] Matching: {len(scored_pairs)} pairs "
         f"({time.monotonic() - t3:.1f}s)"
     )
 
     sha_join = _empty_sha_join()
     fresh_records: List[Dict[str, Any]] = []
-    for paragraph, symbol in fresh_pairs:
+    linked_paragraphs: Dict[Tuple[str, Any], str] = {}
+    for paragraph, symbol, score, provenance in scored_pairs:
         doc_sha = _doc_sha_for(paragraph.doc_id, doc_index)
         sha_join["doc_matched" if doc_sha else "doc_missing"] += 1
         code_sha, outcome = code_join_by_identity[symbol.identity]
@@ -1079,6 +1375,8 @@ def build_links(
             sha_join["code_matched"] += 1
         else:
             sha_join["code_missing"] += 1
+        if paragraph.text and paragraph.anchor not in linked_paragraphs:
+            linked_paragraphs[paragraph.anchor] = paragraph.text
         fresh_records.append(
             build_record(
                 project_id=project_id,
@@ -1086,20 +1384,40 @@ def build_links(
                 symbol=symbol,
                 doc_sha=doc_sha,
                 code_sha=code_sha,
+                score=score,
+                provenance=provenance,
             )
         )
+
+    sensitive_terms = _load_repo_sensitive_terms()
+    snippets: Dict[Tuple[str, Any], str] = {
+        anchor: _redact_snippet_for_store(raw_text, sensitive_terms)
+        for anchor, raw_text in linked_paragraphs.items()
+    }
 
     # ── Step 4/6: Load existing links + stale propagation (O(L)) ─────────
     progress("[step 4/6] Loading existing links...")
     t4 = time.monotonic()
-    existing = link_store.load_links(links_dir)
-    latest: Dict[tuple, Dict[str, Any]] = {}
-    for record in existing:
-        latest[link_store.record_key(record)] = record
-    progress(
-        f"[step 4/6] Existing links: {len(existing)} records "
-        f"({time.monotonic() - t4:.1f}s)"
+    raw_log_path = links_dir / link_store.LINKS_FILENAME
+    oversized_reconcile = (
+        reconcile
+        and raw_log_path.is_file()
+        and raw_log_path.stat().st_size > link_store.MAX_RAW_LOG_BYTES
     )
+    if oversized_reconcile:
+        existing: List[Dict[str, Any]] = []
+        latest: Dict[tuple, Dict[str, Any]] = {}
+        progress(
+            f"[step 4/6] Reconcile compact mode: bypassing oversized "
+            f"links.jsonl ({raw_log_path.stat().st_size // (1024 * 1024)} MB)"
+        )
+    else:
+        existing = link_store.load_links(links_dir)
+        latest = {link_store.record_key(record): record for record in existing}
+        progress(
+            f"[step 4/6] Existing links: {len(existing)} records "
+            f"({time.monotonic() - t4:.1f}s)"
+        )
 
     def _sha_changed(record: Mapping[str, Any]) -> bool:
         doc_sha = _doc_sha_for(
@@ -1128,7 +1446,7 @@ def build_links(
     progress("[step 4/6] Stale propagation...")
     t4b = time.monotonic()
     staled: List[Dict[str, Any]] = []
-    if not dry_run:
+    if not dry_run and not oversized_reconcile:
         if reconcile:
             staled = link_store.mark_stale(
                 links_dir, lambda record: True, _loaded_records=existing,
@@ -1158,16 +1476,23 @@ def build_links(
 
     progress(f"[step 5/6] Writing {len(new_records)} new links...")
     t5 = time.monotonic()
-    if not dry_run and new_records:
-        link_store.append_links(links_dir, new_records)
+    if not dry_run:
+        if oversized_reconcile:
+            link_store.compact_store_on_reconcile(
+                links_dir, new_records, snippets=snippets
+            )
+        elif new_records:
+            link_store.append_links(
+                links_dir, new_records, snippets=snippets
+            )
+        elif snippets:
+            link_store.save_paragraph_snippets(links_dir, snippets)
     progress(f"[step 5/6] Write done ({time.monotonic() - t5:.1f}s)")
 
     # ── Step 6/6: Coverage + state ───────────────────────────────────────
     progress("[step 6/6] Computing coverage + saving state...")
     t6 = time.monotonic()
 
-    # Canonical projection: latest record per key across existing lines,
-    # appended stale copies and the fresh set.
     projected = link_store.latest_records(existing + staled + new_records)
     coverage = link_store.coverage_stats(
         projected,
@@ -1242,14 +1567,19 @@ __all__ = [
     "JOIN_MATCHED",
     "JOIN_MISSING",
     "LinkEngineError",
+    "MAX_CANDIDATES_PER_TOKEN",
+    "MAX_PARAGRAPHS_PER_DOC_SYMBOL",
+    "MAX_UNSCOPED_SYMBOL_DF",
     "ParagraphRef",
     "build_doc_sha_index",
     "build_links",
     "build_record",
     "compute_fresh_pairs",
+    "compute_scored_pairs",
     "flatten_doc_rel",
     "load_code_folder_inventories",
     "load_code_inventory_hashes",
+    "load_doc_folder_hashes",
     "load_sync_state_hashes",
     "normalize_repo_key",
     "SYMBOL_READ_BATCH",

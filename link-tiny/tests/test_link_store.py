@@ -281,3 +281,98 @@ def test_append_lock(project_dir):
     assert len(records) == 100  # every line intact, none interleaved
     doc_ids = {r["doc"]["doc_id"] for r in records}
     assert len(doc_ids) == 100
+
+
+# ---------------------------------------------------------------------------
+# SQLite WAL indexed store + multi-resolution waterfalls (v2)
+# ---------------------------------------------------------------------------
+
+
+def test_sqlite_indexed_queries_and_waterfalls(project_dir):
+    r1 = _record(
+        doc={"doc_id": "specs__order_form_spec.xlsx", "paragraph_id": 1, "source_sha": "a1"},
+        code={
+            "target_type": "symbol",
+            "parser_type": "dotnet",
+            "path": "src/orders/OrderSummaryForm.Designer.vb",
+            "name": "grid_unit_col",
+            "lines": [100, 120],
+            "source_sha": "c1",
+        },
+        score=1.0,
+    )
+    r2 = _record(
+        doc={"doc_id": "specs__order_form_spec.xlsx", "paragraph_id": 2, "source_sha": "a1"},
+        code={
+            "target_type": "symbol",
+            "parser_type": "dotnet",
+            "path": "src/orders/OrderSummaryForm.vb",
+            "name": "OrderSummaryForm_Load",
+            "lines": [10, 50],
+            "source_sha": "c2",
+        },
+        score=0.85,
+    )
+    snippets = {
+        ("specs__order_form_spec.xlsx", 1): "grid_unit_col controls unit column",
+        ("specs__order_form_spec.xlsx", 2): "OrderSummaryForm_Load initializes grid",
+    }
+    store.append_links(project_dir, [r1, r2], snippets=snippets)
+    assert (project_dir / "links.db").is_file()
+
+    # Forward waterfall: POSIX unflattened path matches __-flattened doc_id
+    fwd, total = store.query_code_for_doc(
+        project_dir, doc_id="specs/order_form_spec.xlsx"
+    )
+    assert total == 2
+    assert [item[0]["code"]["name"] for item in fwd] == [
+        "grid_unit_col",
+        "OrderSummaryForm_Load",
+    ]
+    assert fwd[0][1] == "grid_unit_col controls unit column"
+
+    # Forward waterfall: stem-only lookup
+    fwd_stem, total_stem = store.query_code_for_doc(
+        project_dir, doc_id="order_form_spec"
+    )
+    assert total_stem == 2
+
+    # Reverse waterfall: stem path matches both .vb and .Designer.vb
+    rev_path, total_rev = store.query_doc_for_code(
+        project_dir, path="OrderSummaryForm"
+    )
+    assert total_rev == 2
+
+    # Reverse waterfall: qualified name suffix + case-insensitive match_key
+    rev_sym, total_sym = store.query_doc_for_code(
+        project_dir, name="MyNamespace.GRID_UNIT_COL"
+    )
+    assert total_sym == 1
+    assert rev_sym[0][0]["code"]["name"] == "grid_unit_col"
+
+    # Status counts from SQLite
+    assert store.query_status_counts(project_dir) == {
+        "active": 2,
+        "stale": 0,
+        "total": 2,
+    }
+
+
+def test_compact_store_on_reconcile(project_dir):
+    store.append_links(project_dir, [_record(), _record(doc={"doc_id": "D2", "paragraph_id": 1})])
+    store.mark_stale(project_dir, lambda r: True)
+    fresh = [_record(doc={"doc_id": "D3", "paragraph_id": 5})]
+    written = store.compact_store_on_reconcile(
+        project_dir, fresh, snippets={("D3", 5): "fresh snippet"}
+    )
+    assert written == 1
+    assert len(store.load_links(project_dir)) == 1
+    assert store.query_status_counts(project_dir) == {
+        "active": 1,
+        "stale": 0,
+        "total": 1,
+    }
+    fwd, total = store.query_code_for_doc(project_dir, doc_id="D3")
+    assert total == 1
+    assert fwd[0][1] == "fresh snippet"
+
