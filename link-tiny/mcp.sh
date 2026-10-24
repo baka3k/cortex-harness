@@ -5,11 +5,16 @@ set -euo pipefail
 # "…/link-tiny/mcp_server.py" — the substring the lifecycle/dev pause logic
 # matches on (unique vs code-tiny's fastmcp_server.py).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 elif [ -f ".venv/Scripts/activate" ]; then
     source .venv/Scripts/activate
+elif [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
+    source "$ROOT_DIR/.venv/bin/activate"
+elif [ -f "$ROOT_DIR/.venv/Scripts/activate" ]; then
+    source "$ROOT_DIR/.venv/Scripts/activate"
 fi
 
 if [ -f ".env" ]; then

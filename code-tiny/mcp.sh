@@ -11,10 +11,17 @@ set -euo pipefail
 # source .venv/bin/activate && source .env && python mcp/android/android_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp
 # Activate virtual environment
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
 elif [ -f ".venv/Scripts/activate" ]; then
     source .venv/Scripts/activate
+elif [ -f "$ROOT_DIR/.venv/bin/activate" ]; then
+    source "$ROOT_DIR/.venv/bin/activate"
+elif [ -f "$ROOT_DIR/.venv/Scripts/activate" ]; then
+    source "$ROOT_DIR/.venv/Scripts/activate"
 fi
 
 if [ -f ".env" ]; then

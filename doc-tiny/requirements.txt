@@ -12,8 +12,7 @@ python-pptx
 openpyxl
 sentence-transformers>=2.7.0
 spacy
-fastmcp
-python-dotenv
+fastmcp==4.0.4
 lxml
 gliner
 pandas

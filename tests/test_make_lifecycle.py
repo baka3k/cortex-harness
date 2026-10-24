@@ -149,7 +149,11 @@ class MakeLifecycleTests(unittest.TestCase):
 
     def test_make_sync_stop_aliases_dispatch_to_scoped_dev_commands(self):
         expected_python = ".venv/bin/python" if (ROOT / ".venv/bin/python").exists() else "python3"
-        for goals, owner in ((["sync", "code", "stop"], "code"), (["sync", "doc", "stop"], "doc")):
+        for goals, owner in (
+            (["sync", "code", "stop"], "code"),
+            (["sync", "doc", "stop"], "doc"),
+            (["sync", "link", "stop"], "link"),
+        ):
             with self.subTest(owner=owner):
                 result = subprocess.run(
                     ["make", "-n", *goals],
@@ -163,6 +167,20 @@ class MakeLifecycleTests(unittest.TestCase):
                     f"{expected_python} cortex_harness/dev.py sync {owner} stop",
                     result.stdout,
                 )
+
+    def test_prefetch_embedding_model_delegates_to_venv_python_when_outer_python_differs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fake_venv_python = Path(directory) / "python"
+            fake_venv_python.write_text("#!/bin/sh\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"CORTEX_SKIP_MODEL_PREFETCH": ""}, clear=False), mock.patch.object(
+                LIFECYCLE.subprocess, "run"
+            ) as subproc_run:
+                LIFECYCLE.prefetch_embedding_model(fake_venv_python)
+            subproc_run.assert_called_once()
+            cmd = subproc_run.call_args.args[0]
+            self.assertEqual(cmd[0], str(fake_venv_python))
+            self.assertEqual(cmd[1], "-c")
+            self.assertIn("prefetch_embedding_model()", cmd[2])
 
     def test_build_creates_and_populates_the_venv_with_uv(self):
         with tempfile.TemporaryDirectory() as directory:

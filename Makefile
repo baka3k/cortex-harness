@@ -13,7 +13,7 @@ UV ?= uv
 export UV
 DEV := $(PYTHON) cortex_harness/dev.py
 
-.PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop install-adlc install-devkit
+.PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc link sync-code-stop sync-doc-stop sync-link-stop install-adlc install-devkit
 
 help:
 	@$(LIFECYCLE) help
@@ -69,20 +69,23 @@ doctor:
 # Natural-language aliases requested for operational use:
 #   make sync code stop
 #   make sync doc stop
+#   make sync link stop
 sync:
 ifeq ($(word 3,$(MAKECMDGOALS)),stop)
 ifeq ($(word 2,$(MAKECMDGOALS)),code)
 	$(DEV) sync code stop
 else ifeq ($(word 2,$(MAKECMDGOALS)),doc)
 	$(DEV) sync doc stop
+else ifeq ($(word 2,$(MAKECMDGOALS)),link)
+	$(DEV) sync link stop
 else
-	$(error Usage: make sync code stop OR make sync doc stop)
+	$(error Usage: make sync code stop OR make sync doc stop OR make sync link stop)
 endif
 else
-	$(error Usage: make sync code stop OR make sync doc stop)
+	$(error Usage: make sync code stop OR make sync doc stop OR make sync link stop)
 endif
 
-code doc:
+code doc link:
 	@:
 
 sync-code-stop:
@@ -90,6 +93,9 @@ sync-code-stop:
 
 sync-doc-stop:
 	$(DEV) sync doc stop
+
+sync-link-stop:
+	$(DEV) sync link stop
 
 start:
 	$(LIFECYCLE) start $(START_ARGS)

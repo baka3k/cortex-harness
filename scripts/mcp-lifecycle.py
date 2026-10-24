@@ -362,10 +362,10 @@ def invoke_build() -> None:
             file=sys.stderr,
         )
 
-    prefetch_embedding_model()
+    prefetch_embedding_model(python)
 
 
-def prefetch_embedding_model() -> None:
+def prefetch_embedding_model(python: Path | None = None) -> None:
     """Pre-download the unified embedding model snapshot (best-effort).
 
     The dependency floors installed above guarantee the *libraries* can
@@ -378,6 +378,23 @@ def prefetch_embedding_model() -> None:
     skip = str(os.environ.get("CORTEX_SKIP_MODEL_PREFETCH", "")).strip().lower()
     if skip in {"1", "true", "yes", "on"}:
         print("[build] Embedding-model prefetch skipped (CORTEX_SKIP_MODEL_PREFETCH).")
+        return
+    if (
+        python is not None
+        and python.is_file()
+        and Path(sys.executable).resolve() != python.resolve()
+    ):
+        # On a fresh clone, `make build` launches mcp-lifecycle.py with the
+        # outer system python3 before `.venv` exists. Delegate prefetching to
+        # the newly populated `.venv/bin/python` so `huggingface_hub` is found.
+        script = (
+            "import importlib.util; "
+            f"spec = importlib.util.spec_from_file_location('mcp_lifecycle', {str(Path(__file__).resolve())!r}); "
+            "mod = importlib.util.module_from_spec(spec); "
+            "spec.loader.exec_module(mod); "
+            "mod.prefetch_embedding_model()"
+        )
+        subprocess.run([str(python), "-c", script], check=False)
         return
     try:
         from huggingface_hub import snapshot_download

@@ -32,15 +32,19 @@ libclang==18.1.1
 # tree_sitter_vb_dotnet); the only vb-family grammar that exists on PyPI.
 # VB6 has none — vb6 extraction is ANTLR-first via the
 # vendored ProLeap worker with regex fallback (plan 260917-1200).
+tree-sitter-vb-dotnet
 # Additional dependencies for C++ analysis and web services
 fastapi
 uvicorn[standard]
 python-multipart
 requests
+httpx
+PyYAML>=6.0
+rank-bm25>=0.2.2
 torch
 transformers>=4.51,<4.56
 # Existing dependencies
-tree-sitter
+tree-sitter>=0.25,<0.26
 tree-sitter-rust
 tree-sitter-go
 tree-sitter-languages
@@ -56,6 +60,12 @@ tree-sitter-sql
 tree-sitter-c-sharp
 tree-sitter-swift
 tree-sitter-language-pack
+tree-sitter-dart>=0.1.0,<0.2
+tree-sitter-perl==1.2.1
 
 # Deep learning librariespip
 einops
+
+# Test runner dependencies
+pytest>=9.0,<10
+pytest-asyncio>=1.0,<2

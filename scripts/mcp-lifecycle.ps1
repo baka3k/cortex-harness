@@ -3,7 +3,7 @@ param(
     [Parameter(Position = 0)]
     [ValidateSet("build", "install", "uninstall", "infra-up", "infra-down", "storage-layout", "storage-init", "storage-migrate-layout", "storage-backup", "storage-stop", "doctor", "start", "stop", "help")]
     [string]$Action = "help",
-    [ValidateSet("all", "code", "doc")]
+    [ValidateSet("all", "code", "doc", "link")]
     [string]$Server = "all",
     [string]$Name = "",
     [string]$Project = "",
@@ -41,6 +41,7 @@ $Servers = @(
         PythonScript = "mcp/unified_mcp.py"
         Arguments = @("--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8788", "--path", "/mcp")
         Port = 8788
+        Default = $true
     },
     [pscustomobject]@{
         Name = "doc-tiny"
@@ -49,6 +50,16 @@ $Servers = @(
         PythonScript = "mcp_graph_rag.py"
         Arguments = @("--host", "127.0.0.1", "--port", "8789", "--transport", "streamable-http", "--path", "/mcp")
         Port = 8789
+        Default = $true
+    },
+    [pscustomobject]@{
+        Name = "link-tiny"
+        WorkDir = Join-Path $Root "link-tiny"
+        Script = Join-Path (Join-Path $Root "link-tiny") "mcp.sh"
+        PythonScript = "mcp_server.py"
+        Arguments = @("--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8790", "--path", "/mcp")
+        Port = 8790
+        Default = $false
     }
 )
 
@@ -228,7 +239,8 @@ function Invoke-Build {
     $requirements = @(
         (Join-Path $Root "requirements.txt"),
         (Join-Path (Join-Path $Root "code-tiny") "requirements.txt"),
-        (Join-Path (Join-Path $Root "doc-tiny") "requirements.txt")
+        (Join-Path (Join-Path $Root "doc-tiny") "requirements.txt"),
+        (Join-Path (Join-Path $Root "link-tiny") "requirements.txt")
     ) | Where-Object { Test-Path -LiteralPath $_ }
 
     $installArguments = @("pip", "install", "--python", $python)
@@ -242,6 +254,26 @@ function Invoke-Build {
     Invoke-Uv -Uv $uv -Arguments $installArguments
 
     Write-Host "[build] Dependency sync complete (uv)."
+
+    $lifecyclePy = Join-Path $Root "scripts/mcp-lifecycle.py"
+    $postBuildScript = @"
+import importlib.util, sys
+from pathlib import Path
+root = Path(r'$Root')
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(root / 'code-tiny'))
+try:
+    from tools.vb.vb6_antlr_adapter import ensure_worker_built
+    jar_path = ensure_worker_built(verbose=True)
+    print(f'[build] VB6 ANTLR worker jar ready: {jar_path}')
+except Exception as exc:
+    print(f'[build] WARN: VB6 ANTLR worker jar not built ({exc}).', file=sys.stderr)
+spec = importlib.util.spec_from_file_location('mcp_lifecycle', r'$lifecyclePy')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.prefetch_embedding_model()
+"@
+    & $python -c $postBuildScript
 }
 
 function Get-UserBinDir {
@@ -327,14 +359,20 @@ function Install-DevCommand {
     New-Item -ItemType Directory -Force -Path $binDir | Out-Null
 
     if (Test-IsWindows) {
-        $source = Join-Path $Root "dev-global.cmd"
         $target = Join-Path $binDir "dev.cmd"
+        $content = @"
+@echo off
+REM Global CLI wrapper for cortex-harness dev command
+set "CORTEX_HARNESS_DIR=$Root"
+set "PYTHON_EXE=%CORTEX_HARNESS_DIR%\.venv\Scripts\python.exe"
+if not exist "%PYTHON_EXE%" set "PYTHON_EXE=python"
+set "DEV_MODULE=%CORTEX_HARNESS_DIR%\cortex_harness\dev.py"
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
 
-        if (-not (Test-Path -LiteralPath $source)) {
-            throw "Global dev wrapper not found: $source"
-        }
-
-        Copy-Item -LiteralPath $source -Destination $target -Force
+"%PYTHON_EXE%" "%DEV_MODULE%" %*
+"@
+        Set-Content -LiteralPath $target -Value $content -Encoding UTF8
     } else {
         $target = Join-Path $binDir "dev"
         $rootForShell = $Root -replace "'", "'\''"
@@ -736,11 +774,15 @@ function Stop-MarkerProcesses {
     $markers = @(
         "code-tiny\mcp.sh",
         "doc-tiny\mcp.sh",
+        "link-tiny\mcp.sh",
         "code-tiny/mcp.sh",
         "doc-tiny/mcp.sh",
+        "link-tiny/mcp.sh",
         "mcp\unified_mcp.py",
         "mcp/unified_mcp.py",
-        "mcp_graph_rag.py"
+        "mcp_graph_rag.py",
+        "link-tiny\mcp_server.py",
+        "link-tiny/mcp_server.py"
     )
 
     $processes = Get-CimInstance Win32_Process | Where-Object {
@@ -889,7 +931,7 @@ function Get-StartConfiguration {
             Instance = "default"
             HostName = "127.0.0.1"
             Path = "/mcp"
-            Servers = @($Servers)
+            Servers = @($Servers | Where-Object { $_.Default -ne $false })
         }
     }
 
@@ -914,6 +956,9 @@ function Get-StartConfiguration {
     }
     $selected = @()
     foreach ($source in $Servers) {
+        if ($Server -eq "all" -and $source.Default -eq $false) {
+            continue
+        }
         if ($Server -ne "all" -and -not $source.Name.StartsWith($Server)) {
             continue
         }

@@ -2,7 +2,7 @@ qdrant-client==1.18.0
 falkordblite==0.10.0 ; sys_platform != 'win32'
 falkordb ; sys_platform == 'win32'
 # FastMCP dependencies
-fastmcp
+fastmcp==4.0.4
 
 # New C/C++ analysis tools
 networkx
@@ -47,7 +47,9 @@ tree-sitter-perl==1.2.1
 # Deep learning librariespip
 einops
 sentence-transformers>=2.7.0
-dotenv
+python-dotenv
 PyYAML>=6.0
+rank-bm25>=0.2.2
+httpx
 portalocker>=3.2,<4
 psutil>=5.9,<8

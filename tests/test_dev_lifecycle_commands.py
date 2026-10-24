@@ -126,7 +126,15 @@ class DevLifecycleCommandTests(unittest.TestCase):
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
         make_targets = set(phony.removeprefix(".PHONY:").split())
-        make_only_sync_aliases = {"code", "doc", "sync-code-stop", "sync-doc-stop"}
+        make_only_sync_aliases = {
+            "code",
+            "doc",
+            "link",
+            "sync-code-stop",
+            "sync-doc-stop",
+            "sync-link-stop",
+            "install-devkit",
+        }
         self.assertEqual(
             make_targets - set(cli.commands) - make_only_sync_aliases,
             set(),
